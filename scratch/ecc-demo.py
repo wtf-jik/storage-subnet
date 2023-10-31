@@ -357,19 +357,54 @@ for commitment_i in commitments:
 print("All chunks validated successfuly!")
 
 
+def verify(committer, commitments, merkle_root):
+    for commitment_i in commitments:
+        index = commitment_i['index']
+        commitment = commitment_i['point']
+        data = commitment_i['data_chunk']
+        r = commitment_i['randomness']
+        merkle_proof_i = commitment_i['merkle_proof']
+
+        if not committer.open(commitment, hash_data(data), r):
+            print(f"Opening commitment {index} failed")
+            return False
+
+        if not validate_merkle_proof(
+            merkle_proof_i, ecc_point_to_hex(commitment_i['point']), merkle_root
+        ):
+            print(f"Merkle proof {index} validation failed")
+            return False
+
+    return True
+
 # Recommit data and send back to validator (miner side)
 def recommit_data(committer, challenge_indices, merkle_tree, data):
-    new_commitments = {}
+    # new_commitments = {}
+    new_commitments = []
     for i in challenge_indices:
         c, m_val, r = committer.commit(data[i])
-        new_commitments[i] = {
-            "commitment": c,
-            "random_vals": r
-        }
+        commitment_hash = hash_data(ecc_point_to_hex(c)) # Assuming a hash_function is available.
+        new_commitments.append( {
+            "index": i,
+            "hash": commitment_hash,
+            "data_chunk": data[i],
+            "point": c,
+            "randomness": r,
+            "merkle_proof": None
+        })
         merkle_tree.update_leaf(i, ecc_point_to_hex(c))
     new_merkle_root = merkle_tree.get_merkle_root()
     return new_merkle_root, new_commitments
 
 new_merkle_root, new_commitments = recommit_data(committer, challenge_indices, merkle_tree, chunks)
 print("new_merkle_root:", new_merkle_root)
-print("new_commitments:", new_commitments)
+pprint(new_commitments)
+
+# Generate merkle proof for updated indices
+for nc in new_commitments:
+    nc['merkle_proof'] = merkle_tree.get_proof(nc['index'])
+
+pprint(nc['merkle_proof'])
+
+# Reverify new commitments to make sure we're solid
+print(verify(committer, new_commitments, new_merkle_root))
