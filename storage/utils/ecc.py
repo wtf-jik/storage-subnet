@@ -10,15 +10,18 @@ def hash_data(data):
     h = hashlib.sha3_256(data).hexdigest()
     return int(h, 16)
 
+
 def setup_CRS():
     curve = ECC.generate(curve="P-256")
     g = curve.pointQ  # Base point
     h = ECC.generate(curve="P-256").pointQ  # Another random point
     return g, h
 
+
 def ecc_point_to_hex(point):
     point_str = "{},{}".format(point.x, point.y)
     return binascii.hexlify(point_str.encode()).decode()
+
 
 def hex_to_ecc_point(hex_str, curve):
     point_str = binascii.unhexlify(hex_str).decode()

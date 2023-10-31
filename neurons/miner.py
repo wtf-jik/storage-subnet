@@ -29,7 +29,8 @@ import traceback
 import bittensor as bt
 
 # import this repo
-import template
+import storage
+from storage.utils import MerkleTree, ecc_point_to_hex, hex_to_ecc_point, hash_data
 
 
 def get_config():
@@ -72,6 +73,32 @@ def get_config():
     return config
 
 
+def commit_data(committer, data_chunks):
+    merkle_tree = MerkleTree()
+    commitments = defaultdict(lambda: [None] * len(data_chunks))
+    # commitments = {}
+
+    for index, chunk in enumerate(data_chunks):
+        c, m_val, r = committer.commit(chunk)
+        commitments[index] = {
+            "index": index,
+            "hash": m_val,
+            "data_chunk": chunk,
+            "point": c,
+            "randomness": r,
+            "merkle_proof": None,
+        }
+        merkle_tree.add_leaf(ecc_point_to_hex(c))
+
+    merkle_tree.make_tree()
+    return {
+        merkle_tree.get_merkle_root(): {
+            "commitments": commitments,
+            "merkle_tree": merkle_tree,
+        }
+    }
+
+
 # Main takes the config and starts the miner.
 def main(config):
     # Activating Bittensor's logging with the set configurations.
@@ -112,7 +139,9 @@ def main(config):
     # Step 5: Set up miner functionalities
     # The following functions control the miner's response to incoming requests.
     # The blacklist function decides if a request should be ignored.
-    def blacklist_fn(synapse: template.protocol.Dummy) -> typing.Tuple[bool, str]:
+    def blacklist_fn(
+        synapse: typing.Union[storage.protocol.Store, storage.protocol.Challenge]
+    ) -> typing.Tuple[bool, str]:
         # TODO(developer): Define how miners should blacklist requests. This Function
         # Runs before the synapse data has been deserialized (i.e. before synapse.data is available).
         # The synapse is instead contructed via the headers of the request. It is important to blacklist
@@ -136,7 +165,9 @@ def main(config):
 
     # The priority function determines the order in which requests are handled.
     # More valuable or higher-priority requests are processed before others.
-    def priority_fn(synapse: template.protocol.Dummy) -> float:
+    def priority_fn(
+        synapse: typing.Union[storage.protocol.Store, storage.protocol.Challenge]
+    ) -> float:
         # TODO(developer): Define how miners should prioritize requests.
         # Miners may recieve messages from multiple entities at once. This function
         # determines which request should be processed first. Higher values indicate
@@ -153,13 +184,16 @@ def main(config):
         return prirority
 
     # This is the core miner function, which decides the miner's response to a valid, high-priority request.
-    def dummy(synapse: template.protocol.Dummy) -> template.protocol.Dummy:
+    def store(synapse: storage.protocol.Store) -> storage.protocol.Store:
         # TODO(developer): Define how miners should process requests.
         # This function runs after the synapse has been deserialized (i.e. after synapse.data is available).
         # This function runs after the blacklist and priority functions have been called.
         # Below: simple template logic: return the input value multiplied by 2.
         # If you change this, your miner will lose emission in the network incentive landscape.
         synapse.dummy_output = synapse.dummy_input * 2
+        return synapse
+
+    def challenge(synapse: storage.protocol.Challenge) -> storage.protocol.Challenge:
         return synapse
 
     # Step 6: Build and link miner functions to the axon.

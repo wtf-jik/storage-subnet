@@ -2,6 +2,7 @@ from Crypto.Random import random
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 
+
 def make_random_file(name=None, maxsize=1024):
     size = random.randint(32, maxsize)
     data = os.urandom(size)
@@ -35,7 +36,7 @@ def encrypt_data(filename, key):
 
     # Initialize AES-GCM cipher
     cipher = AES.new(key, AES.MODE_GCM)
-    
+
     # Encrypt the data
     cipher_text, tag = cipher.encrypt_and_digest(data)
 

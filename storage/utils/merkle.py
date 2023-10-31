@@ -123,7 +123,9 @@ class MerkleTree(object):
                 right_child = self.levels[x][parent_index * 2 + 1]
             except IndexError:
                 right_child = bytearray()
-            self.levels[x-1][parent_index] = self.hash_function(left_child + right_child).digest()
+            self.levels[x - 1][parent_index] = self.hash_function(
+                left_child + right_child
+            ).digest()
             index = parent_index
 
 
@@ -144,4 +146,3 @@ def validate_merkle_proof(proof, target_hash, merkle_root):
                 sibling = bytearray.fromhex(p["right"])
                 proof_hash = hashlib.sha3_256(proof_hash + sibling).digest()
         return proof_hash == merkle_root
-
