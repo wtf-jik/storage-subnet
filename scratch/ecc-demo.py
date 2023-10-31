@@ -1,5 +1,5 @@
 import bittensor as bt
-import random
+# import random
 import os
 import sys
 import numpy as np
@@ -121,6 +121,23 @@ class MerkleTree(object):
                 proof.append({sibling_pos: sibling_value})
                 index = int(index / 2.0)
             return proof
+
+    def update_leaf(self, index, new_value):
+        """Update a specific leaf in the tree and propagate changes upwards."""
+        if not self.is_ready:
+            return None
+        new_value = bytearray.fromhex(new_value)
+        self.levels[-1][index] = new_value
+        for x in range(len(self.levels) - 1, 0, -1):
+            parent_index = index // 2
+            left_child = self.levels[x][parent_index * 2]
+            try:
+                right_child = self.levels[x][parent_index * 2 + 1]
+            except IndexError:
+                right_child = bytearray()
+            self.levels[x-1][parent_index] = self.hash_function(left_child + right_child).digest()
+            index = parent_index
+
 
 def validate_merkle_proof(proof, target_hash, merkle_root):
     merkle_root = bytearray.fromhex(merkle_root)
@@ -254,7 +271,6 @@ committer
 def commit_data(committer, data_chunks):
     merkle_tree = MerkleTree()
     commitments = defaultdict(lambda: [None] * len(data_chunks))
-    # commitments = {}
 
     for index, chunk in enumerate(data_chunks):
         c, m_val, r = committer.commit(chunk)
@@ -339,3 +355,16 @@ for commitment_i in commitments:
         raise ValueError
 
 print("All chunks validated successfuly!")
+
+
+# Recommit data and send back to validator (miner side)
+def recommit_data(committer, challenge_indices):
+    new_commitments = {}
+    for i in challenge_indices:
+        c, m_val, r = committer.commit(data[i])
+        commitments[i] = c
+        random_vals[i] = r
+        new_commitments[i] = c
+        merkle_tree.update_leaf(i, ecc_point_to_hex(c))
+    new_merkle_root = merkle_tree.get_merkle_root()
+    return new_merkle_root, new_commitments
