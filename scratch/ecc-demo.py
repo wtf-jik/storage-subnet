@@ -211,7 +211,7 @@ def make_random_file(name=None, maxsize=1024):
         return data
 
 f = random_file = make_random_file()
-len(f)
+print("len(f):", len(f))
 
 
 def encrypt_data(filename, key):
@@ -246,7 +246,7 @@ def encrypt_data(filename, key):
 # Example usage
 key = get_random_bytes(32)  # 256-bit key
 encrypted_data, nonce, tag = encrypt_data(random_file, key)
-encrypted_data
+pprint(f"encrypted_data: {encrypted_data}")
 
 # Determine a random chunksize between 2kb-128kb (random sample from this range) store as chunksize_E
 def get_random_chunksize(maxsize=128):
@@ -266,7 +266,7 @@ print("n chunks:", len(chunks))
 pprint(f"chunks: {chunks}")
 
 committer = ECCommitment(g, h)
-committer
+print("committer:", committer)
 
 def commit_data(committer, data_chunks):
     merkle_tree = MerkleTree()
@@ -298,13 +298,13 @@ def hex_to_ecc_point(hex_str, curve):
 
 store_data = commit_data
 commitments_E = store_data(committer, chunks)
-commitments_E
+print("commitments_E:", commitments_E)
 
 keys = list(commitments_E.keys())
-keys
+print("keys:", keys)
 
 inner_dict = commitments_E[keys[0]]
-inner_dict
+print("inner_dict:", inner_dict)
 
 hashes = inner_dict["commitments"]["hashes"]
 assert len(hashes) == len(chunks)
@@ -313,14 +313,14 @@ def get_challenge_indices(num_chunks, factor=0.1):
     return random.sample(list(range(num_chunks)), int(1 + num_chunks * factor))
 
 ci = challenge_indices = get_challenge_indices(len(chunks))
-ci
+print("challenge indices:", ci)
 
 def get_merkle_root_to_challenge(commitments):
     merkle_roots = list(commitments.keys())
     return random.choice(merkle_roots)
 
 mrc = merkle_root_challenge = get_merkle_root_to_challenge(commitments_E)
-mrc
+print("merkle root to challenge:", mrc)
 
 responses = []
 challenge_data = commitments_E[merkle_root_challenge]
@@ -335,7 +335,7 @@ challenge_response
 merkle_root = list(challenge_response.keys())[0]
 commitments = challenge_response[merkle_root]
 print("merkle_root:", merkle_root)
-commitments
+print("commitments:", commitments)
 
 for commitment_i in commitments:
     index = commitment_i['index']
@@ -358,13 +358,18 @@ print("All chunks validated successfuly!")
 
 
 # Recommit data and send back to validator (miner side)
-def recommit_data(committer, challenge_indices):
+def recommit_data(committer, challenge_indices, merkle_tree, data):
     new_commitments = {}
     for i in challenge_indices:
         c, m_val, r = committer.commit(data[i])
-        commitments[i] = c
-        random_vals[i] = r
-        new_commitments[i] = c
+        new_commitments[i] = {
+            "commitment": c,
+            "random_vals": r
+        }
         merkle_tree.update_leaf(i, ecc_point_to_hex(c))
     new_merkle_root = merkle_tree.get_merkle_root()
     return new_merkle_root, new_commitments
+
+new_merkle_root, new_commitments = recommit_data(committer, challenge_indices, merkle_tree, chunks)
+print("new_merkle_root:", new_merkle_root)
+print("new_commitments:", new_commitments)
