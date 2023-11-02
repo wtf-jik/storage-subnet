@@ -26,7 +26,7 @@ def ecc_point_to_hex(point):
 def hex_to_ecc_point(hex_str, curve):
     point_str = binascii.unhexlify(hex_str).decode()
     x, y = map(int, point_str.split(","))
-    return ECC.EccPoint(curve, x, y)
+    return ECC.EccPoint(x, y, curve=curve)
 
 
 class ECCommitment:

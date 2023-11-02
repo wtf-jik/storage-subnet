@@ -17,6 +17,7 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
+import Crypto
 import typing
 import bittensor as bt
 
@@ -74,3 +75,15 @@ class Dummy(bt.Synapse):
         5
         """
         return self.dummy_output
+
+class Setup(bt.Synapse):
+
+    curve: str # e.g. P-256
+    g: typing.Union[str, Crypto.PublicKey.ECC.EccPoint] # base point   (or hex string representation)
+    h: typing.Union[str, Crypto.PublicKey.ECC.EccPoint] # random point (or hex string representation)
+
+class Store(bt.Synapse):
+
+    data: bytes
+    data_hash: str
+    
