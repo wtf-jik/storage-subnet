@@ -95,10 +95,10 @@ class Store(bt.Synapse):
     size: typing.Optional[int]  # bytes (e.g. 9234) size of full data block
 
     # Returns
-    commitments: typing.Dict[
-        str, typing.List[typing.Union[str, Crypto.PublicKey.ECC.EccPoint]]
-    ]  # the commitment to the data
-    merkle_root: str  # the merkle root of the data
+    commitments: typing.Opional[
+        typing.Dict[str, typing.List[typing.Union[str, Crypto.PublicKey.ECC.EccPoint]]]
+    ] = None  # the commitment to the data
+    merkle_root: typing.Optional[str] = None  # the merkle root of the data
 
 
 class Challenge(bt.Synapse):
@@ -106,15 +106,17 @@ class Challenge(bt.Synapse):
     challenge_indices: typing.List[int]  # list of block indices to challenge
 
     # Returns
-    responses: typing.List[
-        typing.Dict[
-            str,  # index, commitment, data_chunk, random_value, merkle_proof
-            typing.Union[
-                int, # index, random_value
-                str, # hex point representation
-                Crypto.PublicKey.ECC.EccPoint, # point
-                bytes, # data chunk
-                typing.List[typing.Tuple[str, str]], # merkle proof
-            ],
+    responses: typing.Optional[
+        typing.List[
+            typing.Dict[
+                str,  # index, commitment, data_chunk, random_value, merkle_proof
+                typing.Union[
+                    int,  # index, random_value
+                    str,  # hex point representation
+                    Crypto.PublicKey.ECC.EccPoint,  # point
+                    bytes,  # data chunk
+                    typing.List[typing.Tuple[str, str]],  # merkle proof
+                ],
+            ]
         ]
-    ]
+    ] = None
