@@ -5,16 +5,7 @@ import binascii
 class MerkleTree(object):
     def __init__(self, hash_type="sha3_256"):
         hash_type = hash_type.lower()
-        if hash_type in [
-            "sha256",
-            "sha224",
-            "sha384",
-            "sha512",
-            "sha3_256",
-            "sha3_224",
-            "sha3_384",
-            "sha3_512",
-        ]:
+        if hash_type in ["sha3_256"]:
             self.hash_function = getattr(hashlib, hash_type)
         else:
             raise Exception("`hash_type` {} nor supported".format(hash_type))
@@ -129,7 +120,8 @@ class MerkleTree(object):
             index = parent_index
 
 
-def validate_merkle_proof(proof, target_hash, merkle_root):
+def validate_merkle_proof(proof, target_hash, merkle_root, hash_type="sha3_256"):
+    hash_func = getattr(hashlib, hash_type) 
     merkle_root = bytearray.fromhex(merkle_root)
     target_hash = bytearray.fromhex(target_hash)
     if len(proof) == 0:
@@ -140,9 +132,9 @@ def validate_merkle_proof(proof, target_hash, merkle_root):
             try:
                 # the sibling is a left node
                 sibling = bytearray.fromhex(p["left"])
-                proof_hash = hashlib.sha3_256(sibling + proof_hash).digest()
+                proof_hash = hash_func(sibling + proof_hash).digest()
             except:
                 # the sibling is a right node
                 sibling = bytearray.fromhex(p["right"])
-                proof_hash = hashlib.sha3_256(proof_hash + sibling).digest()
+                proof_hash = hash_func(proof_hash + sibling).digest()
         return proof_hash == merkle_root

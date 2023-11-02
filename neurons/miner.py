@@ -98,14 +98,34 @@ def commit_data(committer, data_chunks):
         }
     }
 
+# Recommit data and send back to validator (miner side)
+def recommit_data(committer, challenge_indices, merkle_tree, data):
+    # new_commitments = {}
+    new_commitments = []
+    for i in challenge_indices:
+        c, m_val, r = committer.commit(data[i])
+        commitment_hash = hash_data(
+            ecc_point_to_hex(c)
+        )  # Assuming a hash_function is available.
+        new_commitments.append(
+            {
+                "index": i,
+                "hash": commitment_hash,
+                "data_chunk": data[i],
+                "point": c,
+                "randomness": r,
+                "merkle_proof": None,
+            }
+        )
+        merkle_tree.update_leaf(i, ecc_point_to_hex(c))
+    new_merkle_root = merkle_tree.get_merkle_root()
+    return new_merkle_root, new_commitments
+
 
 # Main takes the config and starts the miner.
 def main(config):
     # Activating Bittensor's logging with the set configurations.
     bt.logging(config=config, logging_dir=config.full_path)
-    bt.logging.info(
-        f"Running miner for subnet: {config.netuid} on network: {config.subtensor.chain_endpoint} with config:"
-    )
 
     # This logs the active configuration to the specified logging directory for review.
     bt.logging.info(config)
@@ -131,6 +151,10 @@ def main(config):
             f"\nYour miner: {wallet} is not registered to chain connection: {subtensor} \nRun btcli register and try again. "
         )
         exit()
+
+    bt.logging.info(
+        f"Running miner for subnet: {config.netuid} on network: {subtensor.chain_endpoint} with config:"
+    )
 
     # Each miner gets a unique identity (UID) in the network for differentiation.
     my_subnet_uid = metagraph.hotkeys.index(wallet.hotkey.ss58_address)

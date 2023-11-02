@@ -12,6 +12,15 @@ def make_random_file(name=None, maxsize=1024):
     else:
         return data
 
+# Determine a random chunksize between 2kb-128kb (random sample from this range) store as chunksize_E
+def get_random_chunksize(maxsize=128):
+    return random.randint(2, maxsize)
+
+
+def chunk_data(data, chunksize: int):
+    for i in range(0, len(data), chunksize):
+        yield data[i : i + chunksize]
+
 
 def encrypt_data(filename, key):
     """
