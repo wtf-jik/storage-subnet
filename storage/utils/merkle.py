@@ -121,7 +121,7 @@ class MerkleTree(object):
 
 
 def validate_merkle_proof(proof, target_hash, merkle_root, hash_type="sha3_256"):
-    hash_func = getattr(hashlib, hash_type) 
+    hash_func = getattr(hashlib, hash_type)
     merkle_root = bytearray.fromhex(merkle_root)
     target_hash = bytearray.fromhex(target_hash)
     if len(proof) == 0:

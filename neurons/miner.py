@@ -98,6 +98,7 @@ def commit_data(committer, data_chunks):
         }
     }
 
+
 # Recommit data and send back to validator (miner side)
 def recommit_data(committer, challenge_indices, merkle_tree, data):
     # new_commitments = {}
