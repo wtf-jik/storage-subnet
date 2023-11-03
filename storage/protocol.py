@@ -22,8 +22,10 @@ import bittensor as bt
 
 
 class Store(bt.Synapse):
+    # TODO: write deserialize
+
     # Receieves
-    encrypted_data: bytes  # raw bytes of encrypted data
+    encrypted_data: str  # base64 encoded string of encrypted data (bytes)
     data_hash: str  # the hash of the encrypted data
     chunk_size: int  # bytes (e.g. 1024) for how big the chunks should be
     size: typing.Optional[int]  # bytes (e.g. 9234) size of full data block

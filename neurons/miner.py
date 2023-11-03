@@ -240,11 +240,6 @@ def main(config):
         commitments, merkle_root = commit_data(committer, data_chunks)
 
         # Store commitments in local storage indexed by the data hash
-        commitments["setup_params"] = {
-            "g": synapse.g,
-            "h": synapse.h,
-            "curve": synapse.curve,
-        }
         serialized_commitments = serialize_dict_with_bytes(commitments)
         database.set(synapse.data_hash, serialized_commitments)
 

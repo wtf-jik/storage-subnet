@@ -29,7 +29,16 @@ import traceback
 import bittensor as bt
 
 # import this repo
-import template
+from storage.utils import (
+    hash_data,
+    chunk_data,
+    MerkleTree,
+    ECCommitment,
+    ecc_point_to_hex,
+    hex_to_ecc_point,
+    serialize_dict_with_bytes,
+    deserialize_dict_with_bytes,
+)
 
 
 # Step 2: Set up the configuration parser
@@ -41,7 +50,16 @@ def get_config():
     )
     # TODO(developer): Adds your custom validator arguments to the parser.
     parser.add_argument(
-        "--custom", default="my_custom_value", help="Adds a custom value to the parser."
+        "--curve",
+        default="P-256",
+        help="Curve for elliptic curve cryptography.",
+        choices=["P-256"],  # TODO: expand this list
+    )
+    parser.add_argument(
+        "--maxsize",
+        default=1024,
+        type=int,
+        help="Maximum size of random data to store.",
     )
     # Adds override arguments for network and netuid.
     parser.add_argument("--netuid", type=int, default=1, help="The chain subnet uid.")
@@ -123,16 +141,53 @@ def main(config):
     step = 0
     while True:
         try:
+            # Setup CRS for this round of validation
+            g, h = setup_CRS(curve=config.curve)
+
+            # Make a random bytes file to test the miner
+            random_data = make_random_file(maxsize=config.maxsize)
+
+            # Encrypt the data
+            encrypted_data, nonce, tag = encrypt_data(
+                random_data,
+                wallet.hotkey.secret,  # TODO: Use validator key as the encryption key?
+            )
+
+            # Convert to base64 for compactness
+            b64_encrypted_data = base64.b64encode(encrypted_data).decode("utf-8")
+
+            # Hash the encrypted data
+            data_hash = hash_data(encrypted_data)
+
+            # Chunk the data
+            chunksize = get_random_chunksize()
+            # chunks = list(chunk_data(encrypted_data, chunksize))
+
             # TODO(developer): Define how the validator selects a miner to query, how often, etc.
             # Broadcast a query to all miners on the network.
             responses = dendrite.query(
                 # Send the query to all miners in the network.
                 metagraph.axons,
                 # Construct a dummy query.
-                template.protocol.Dummy(dummy_input=step),  # Construct a dummy query.
+                storage.protocol.Store(
+                    chunksize=chunksize,
+                    encrypted_data=b64_encrypted_data,
+                    data_hash=data_hash,
+                    curve=config.curve,
+                    g=ecc_point_to_hex(g),
+                    h=ecc_point_to_hex(h),
+                    size=sys.getsizeof(encrypted_data),
+                ),  # Construct a dummy query.
                 # All responses have the deserialize function called on them before returning.
                 deserialize=True,
             )
+
+            # TODO: Store data params in Redis or GUNdb
+            setup_params = {
+                "g": g,
+                "h": h,
+                "curve": config.curve,
+            }
 
             # Log the results for monitoring purposes.
             bt.logging.info(f"Received dummy responses: {responses}")

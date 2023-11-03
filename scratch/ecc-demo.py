@@ -197,10 +197,10 @@ def hash_data(data):
     return int(h, 16)
 
 
-def setup_CRS():
-    curve = ECC.generate(curve="P-256")
+def setup_CRS(curve="P-256"):
+    curve = ECC.generate(curve=curve)
     g = curve.pointQ  # Base point
-    h = ECC.generate(curve="P-256").pointQ  # Another random point
+    h = ECC.generate(curve=curve).pointQ  # Another random point
     return g, h
 
 
