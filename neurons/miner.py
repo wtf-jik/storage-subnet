@@ -23,6 +23,7 @@ import os
 import time
 import redis
 import typing
+import base64
 import argparse
 import traceback
 import bittensor as bt
@@ -37,6 +38,8 @@ from storage.utils import (
     ECCommitment,
     ecc_point_to_hex,
     hex_to_ecc_point,
+    serialize_dict_with_bytes,
+    deserialize_dict_with_bytes,
 )
 
 
@@ -105,7 +108,7 @@ def commit_data(committer, data_chunks):
         merkle_proof = merkle_tree.get_proof(index)
         commitments[index]["merkle_proof"] = merkle_proof
 
-    return commitments, merkle_tree
+    return commitments, merkle_tree.get_merkle_root()
 
 
 # Recommit data and send back to validator (miner side)
@@ -121,7 +124,7 @@ def recommit_data(committer, challenge_indices, merkle_tree, data):
         new_commitments.append(
             {
                 "index": i,
-                "hash": m_val, #commitment_hash,
+                "hash": m_val,  # commitment_hash,
                 "data_chunk": data[i],
                 "point": c,
                 "randomness": r,
@@ -225,19 +228,38 @@ def main(config):
     # This is the core miner function, which decides the miner's response to a valid, high-priority request.
     def store(synapse: storage.protocol.Store) -> storage.protocol.Store:
         # Chunk the data according to the specified (random) chunk size
-        data_chunks = chunk_data(synapse.encrypted_data, synapse.chunk_size)
+        encrypted_data_bytes = base64.b64decode(synapse.encrypted_data)
+        data_chunks = chunk_data(encrypted_data_bytes, synapse.chunk_size)
+
+        # Extract setup params
+        g = hex_to_ecc_point(synapse.g, synapse.curve)
+        h = hex_to_ecc_point(synapse.h, synapse.curve)
 
         # Commit the data chunks based on the provided curve points
-        committer = ECCommitment(synapse.g, synapse.h)
-        commitments, merkle_tree = commit_data(committer, data_chunks)
+        committer = ECCommitment(g, h)
+        commitments, merkle_root = commit_data(committer, data_chunks)
+
+        # Store commitments in local storage indexed by the data hash
+        commitments["setup_params"] = {
+            "g": synapse.g,
+            "h": synapse.h,
+            "curve": synapse.curve,
+        }
+        serialized_commitments = serialize_dict_with_bytes(commitments)
+        database.set(synapse.data_hash, serialized_commitments)
+
+        # Do not send randomness values to the validator until challenged
+        for commitment in commitments:
+            del commitment["randomness"]
+
+        # Encode base64 so we can send less data over the wire
+        serialized_commitments_return = base64.b64encode(
+            serialize_dict_with_bytes(commitments).encode()
+        ).decode("utf-8")
 
         # Return the commitments and merkle root
-        synapse.commitments = commitments
-        synapse.merkle_root = merkle_tree.get_merkle_root()
-
-        # Store commitments in local storage
-        commitments["merkle_root"] = synapse.merkle_root
-        database.set(synapse.data_hash, commitments)
+        synapse.commitments = serialized_commitments_return
+        synapse.merkle_root = merkle_root
 
         return synapse
 
@@ -247,7 +269,7 @@ def main(config):
         if commitments is None:
             bt.logging.error(
                 f"Commitments not found for data hash: {synapse.data_hash}"
-            ) 
+            )
             return synapse
 
         # Recommit data and send back to validator (miner side)

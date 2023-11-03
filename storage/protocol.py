@@ -21,7 +21,14 @@ import typing
 import bittensor as bt
 
 
-class Setup(bt.Synapse):
+class Store(bt.Synapse):
+    # Receieves
+    encrypted_data: bytes  # raw bytes of encrypted data
+    data_hash: str  # the hash of the encrypted data
+    chunk_size: int  # bytes (e.g. 1024) for how big the chunks should be
+    size: typing.Optional[int]  # bytes (e.g. 9234) size of full data block
+
+    # Setup parameters
     curve: str  # e.g. P-256
     g: typing.Union[
         str, Crypto.PublicKey.ECC.EccPoint
@@ -30,15 +37,7 @@ class Setup(bt.Synapse):
         str, Crypto.PublicKey.ECC.EccPoint
     ]  # random point (or hex string representation)
 
-
-class Store(bt.Synapse):
-    # Receieves
-    encrypted_data: bytes  # raw bytes of encrypted data
-    data_hash: str  # the hash of the encrypted data
-    chunk_size: int  # bytes (e.g. 1024) for how big the chunks should be
-    size: typing.Optional[int]  # bytes (e.g. 9234) size of full data block
-
-    # Returns
+    # Returns serialized commitments
     commitments: typing.Opional[
         typing.Dict[str, typing.List[typing.Union[str, Crypto.PublicKey.ECC.EccPoint]]]
     ] = None  # the commitment to the data

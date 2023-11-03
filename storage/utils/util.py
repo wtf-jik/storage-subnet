@@ -1,3 +1,6 @@
+import json
+import base64
+
 from Crypto.Random import random
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
@@ -51,3 +54,36 @@ def encrypt_data(filename, key):
     cipher_text, tag = cipher.encrypt_and_digest(data)
 
     return cipher_text, cipher.nonce, tag
+
+
+# Function to serialize a dictionary with bytes
+def serialize_dict_with_bytes(data):
+    def encode(item):
+        if isinstance(item, bytes):
+            return base64.b64encode(item).decode("utf-8")
+        elif isinstance(item, dict):
+            return {k: encode(v) for k, v in item.items()}
+        elif isinstance(item, list):
+            return [encode(element) for element in item]
+        else:
+            return item
+
+    return json.dumps({k: encode(v) for k, v in data.items()})
+
+
+# Function to deserialize a dictionary with bytes
+def deserialize_dict_with_bytes(data):
+    def decode(item):
+        if isinstance(item, str):
+            try:
+                return base64.b64decode(item)
+            except (TypeError, ValueError):
+                return item
+        elif isinstance(item, dict):
+            return {k: decode(v) for k, v in item.items()}
+        elif isinstance(item, list):
+            return [decode(element) for element in item]
+        else:
+            return item
+
+    return {k: decode(v) for k, v in json.loads(data).items()}

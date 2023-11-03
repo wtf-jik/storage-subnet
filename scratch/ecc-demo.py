@@ -258,6 +258,18 @@ key = get_random_bytes(32)  # 256-bit key
 encrypted_data, nonce, tag = encrypt_data(random_file, key)
 pprint(f"encrypted_data: {encrypted_data}")
 
+# B64 encode the data
+import base64
+
+b64enc = base64.b64encode(encrypted_data).decode("utf-8")
+print("BASE64 ENCODED ENCRYPTED DATA", b64enc)
+
+# B64 decode the data
+b64dec = base64.b64decode(b64enc)
+print("BASE64 DECODED ENCRYPTED DATA", b64dec)
+
+print("EQUALS:", encrypted_data == b64dec)
+
 
 # Determine a random chunksize between 2kb-128kb (random sample from this range) store as chunksize_E
 def get_random_chunksize(maxsize=128):
@@ -417,7 +429,7 @@ def recommit_data(committer, challenge_indices, merkle_tree, data):
         new_commitments.append(
             {
                 "index": i,
-                "hash": commitment_hash,
+                "hash": m_val,  # commitment_hash,
                 "data_chunk": data[i],
                 "point": c,
                 "randomness": r,
