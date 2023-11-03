@@ -1,7 +1,6 @@
 # The MIT License (MIT)
 # Copyright © 2023 Yuma Rao
-# TODO(developer): Set your name
-# Copyright © 2023 <your name>
+# Copyright © 2023 philanthrope
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 # documentation files (the “Software”), to deal in the Software without restriction, including without limitation
@@ -18,19 +17,27 @@
 # DEALINGS IN THE SOFTWARE.
 
 # Bittensor Miner Template:
-# TODO(developer): Rewrite based on protocol and validator defintion.
 
 # Step 1: Import necessary libraries and modules
 import os
 import time
-import argparse
+import redis
 import typing
+import argparse
 import traceback
 import bittensor as bt
+from collections import defaultdict
 
 # import this repo
 import storage
-from storage.utils import MerkleTree, ecc_point_to_hex, hex_to_ecc_point, hash_data
+from storage.utils import (
+    hash_data,
+    chunk_data,
+    MerkleTree,
+    ECCommitment,
+    ecc_point_to_hex,
+    hex_to_ecc_point,
+)
 
 
 def get_config():
@@ -76,8 +83,8 @@ def get_config():
 def commit_data(committer, data_chunks):
     merkle_tree = MerkleTree()
     commitments = defaultdict(lambda: [None] * len(data_chunks))
-    # commitments = {}
 
+    # Commit each chunk of data
     for index, chunk in enumerate(data_chunks):
         c, m_val, r = committer.commit(chunk)
         commitments[index] = {
@@ -90,17 +97,20 @@ def commit_data(committer, data_chunks):
         }
         merkle_tree.add_leaf(ecc_point_to_hex(c))
 
+    # Create the tree from the leaves
     merkle_tree.make_tree()
-    return {
-        merkle_tree.get_merkle_root(): {
-            "commitments": commitments,
-            "merkle_tree": merkle_tree,
-        }
-    }
+
+    # Get the merkle proof for each commitment
+    for index, commitment in commitments.items():
+        merkle_proof = merkle_tree.get_proof(index)
+        commitments[index]["merkle_proof"] = merkle_proof
+
+    return commitments, merkle_tree
 
 
 # Recommit data and send back to validator (miner side)
 def recommit_data(committer, challenge_indices, merkle_tree, data):
+    # TODO: Store the g,h values in the database so we can retrieve them later
     # new_commitments = {}
     new_commitments = []
     for i in challenge_indices:
@@ -111,7 +121,7 @@ def recommit_data(committer, challenge_indices, merkle_tree, data):
         new_commitments.append(
             {
                 "index": i,
-                "hash": commitment_hash,
+                "hash": m_val, #commitment_hash,
                 "data_chunk": data[i],
                 "point": c,
                 "randomness": r,
@@ -160,6 +170,10 @@ def main(config):
     # Each miner gets a unique identity (UID) in the network for differentiation.
     my_subnet_uid = metagraph.hotkeys.index(wallet.hotkey.ss58_address)
     bt.logging.info(f"Running miner on uid: {my_subnet_uid}")
+
+    # Set up the miner's data storage.
+    # This is where the miner will store the data it receives.
+    database = redis.StrictRedis(host="localhost", port=6379, db=0)
 
     # Step 5: Set up miner functionalities
     # The following functions control the miner's response to incoming requests.
@@ -210,15 +224,35 @@ def main(config):
 
     # This is the core miner function, which decides the miner's response to a valid, high-priority request.
     def store(synapse: storage.protocol.Store) -> storage.protocol.Store:
-        # TODO(developer): Define how miners should process requests.
-        # This function runs after the synapse has been deserialized (i.e. after synapse.data is available).
-        # This function runs after the blacklist and priority functions have been called.
-        # Below: simple template logic: return the input value multiplied by 2.
-        # If you change this, your miner will lose emission in the network incentive landscape.
-        synapse.dummy_output = synapse.dummy_input * 2
+        # Chunk the data according to the specified (random) chunk size
+        data_chunks = chunk_data(synapse.encrypted_data, synapse.chunk_size)
+
+        # Commit the data chunks based on the provided curve points
+        committer = ECCommitment(synapse.g, synapse.h)
+        commitments, merkle_tree = commit_data(committer, data_chunks)
+
+        # Return the commitments and merkle root
+        synapse.commitments = commitments
+        synapse.merkle_root = merkle_tree.get_merkle_root()
+
+        # Store commitments in local storage
+        commitments["merkle_root"] = synapse.merkle_root
+        database.set(synapse.data_hash, commitments)
+
         return synapse
 
     def challenge(synapse: storage.protocol.Challenge) -> storage.protocol.Challenge:
+        # Retrieve commitments from local storage
+        commitments = database.get(synapse.data_hash)
+        if commitments is None:
+            bt.logging.error(
+                f"Commitments not found for data hash: {synapse.data_hash}"
+            ) 
+            return synapse
+
+        # Recommit data and send back to validator (miner side)
+        committer = ECCommitment(synapse.g, synapse.h)
+
         return synapse
 
     # Step 6: Build and link miner functions to the axon.
