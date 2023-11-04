@@ -1,7 +1,6 @@
 # The MIT License (MIT)
 # Copyright © 2023 Yuma Rao
-# TODO(developer): Set your name
-# Copyright © 2023 <your name>
+# Copyright © 2023 philanthrope
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 # documentation files (the “Software”), to deal in the Software without restriction, including without limitation
@@ -18,27 +17,91 @@
 # DEALINGS IN THE SOFTWARE.
 
 # Bittensor Validator Template:
-# TODO(developer): Rewrite based on protocol defintion.
 
 # Step 1: Import necessary libraries and modules
 import os
+import sys
 import time
 import torch
+import base64
 import argparse
 import traceback
 import bittensor as bt
+from Crypto.Random import get_random_bytes
 
 # import this repo
+from storage import protocol
 from storage.utils import (
     hash_data,
+    setup_CRS,
     chunk_data,
     MerkleTree,
+    encrypt_data,
     ECCommitment,
+    make_random_file,
+    get_random_chunksize,
     ecc_point_to_hex,
     hex_to_ecc_point,
     serialize_dict_with_bytes,
     deserialize_dict_with_bytes,
 )
+
+
+def StoreRandomData():
+    # Setup CRS for this round of validation
+    g, h = setup_CRS(curve=config.curve)
+
+    # Make a random bytes file to test the miner
+    random_data = make_random_file(maxsize=config.maxsize)
+
+    # Random encryption key for now (never will decrypt)
+    key = get_random_bytes(32)  # 256-bit key
+
+    # Encrypt the data
+    encrypted_data, nonce, tag = encrypt_data(
+        random_data,
+        key,  # TODO: Use validator key as the encryption key?
+    )
+
+    # Convert to base64 for compactness
+    b64_encrypted_data = base64.b64encode(encrypted_data).decode("utf-8")
+
+    # Hash the encrypted data
+    data_hash = hash_data(encrypted_data)
+
+    # Chunk the data
+    chunk_size = get_random_chunksize()
+    # chunks = list(chunk_data(encrypted_data, chunksize))
+
+    syn = synapse = protocol.Store(
+        chunk_size=chunk_size,
+        encrypted_data=b64_encrypted_data,
+        data_hash=data_hash,
+        curve=config.curve,
+        g=ecc_point_to_hex(g),
+        h=ecc_point_to_hex(h),
+        size=sys.getsizeof(encrypted_data),
+    )
+    print("synapse:", synapse)
+    import pdb
+
+    pdb.set_trace()
+    # Broadcast a query to all miners on the network.
+    responses = dendrite.query(
+        metagraph.axons,
+        synapse,
+        deserialize=True,
+    )
+
+    # TODO: Store data params in Redis or GUNdb
+    setup_params = {
+        "g": g,
+        "h": h,
+        "curve": config.curve,
+    }
+
+    # Log the results for monitoring purposes.
+    bt.logging.info(f"Received responses: {responses}")
 
 
 # Step 2: Set up the configuration parser
@@ -57,7 +120,7 @@ def get_config():
     )
     parser.add_argument(
         "--maxsize",
-        default=1024,
+        default=128,
         type=int,
         help="Maximum size of random data to store.",
     )
@@ -90,6 +153,11 @@ def get_config():
 
     # Return the parsed config.
     return config
+
+
+config = get_config()
+
+StoreRandomData()
 
 
 def main(config):
@@ -163,13 +231,10 @@ def main(config):
             chunksize = get_random_chunksize()
             # chunks = list(chunk_data(encrypted_data, chunksize))
 
-            # TODO(developer): Define how the validator selects a miner to query, how often, etc.
             # Broadcast a query to all miners on the network.
             responses = dendrite.query(
-                # Send the query to all miners in the network.
                 metagraph.axons,
-                # Construct a dummy query.
-                storage.protocol.Store(
+                protocol.Store(
                     chunksize=chunksize,
                     encrypted_data=b64_encrypted_data,
                     data_hash=data_hash,
@@ -177,8 +242,7 @@ def main(config):
                     g=ecc_point_to_hex(g),
                     h=ecc_point_to_hex(h),
                     size=sys.getsizeof(encrypted_data),
-                ),  # Construct a dummy query.
-                # All responses have the deserialize function called on them before returning.
+                ),
                 deserialize=True,
             )
 
@@ -190,7 +254,7 @@ def main(config):
             }
 
             # Log the results for monitoring purposes.
-            bt.logging.info(f"Received dummy responses: {responses}")
+            bt.logging.info(f"Received responses: {responses}")
 
             # TODO(developer): Define how the validator scores responses.
             # Adjust the scores based on responses from miners.
@@ -242,9 +306,9 @@ def main(config):
             exit()
 
 
-# The main function parses the configuration and runs the validator.
-if __name__ == "__main__":
-    # Parse the configuration.
-    config = get_config()
-    # Run the main function.
-    main(config)
+# # The main function parses the configuration and runs the validator.
+# if __name__ == "__main__":
+#     # Parse the configuration.
+#     config = get_config()
+#     # Run the main function.
+#     main(config)

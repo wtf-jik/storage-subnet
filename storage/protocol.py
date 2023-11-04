@@ -20,6 +20,8 @@ import Crypto
 import typing
 import bittensor as bt
 
+from Crypto.PublicKey import ECC
+
 
 class Store(bt.Synapse):
     # TODO: write deserialize
@@ -32,16 +34,12 @@ class Store(bt.Synapse):
 
     # Setup parameters
     curve: str  # e.g. P-256
-    g: typing.Union[
-        str, Crypto.PublicKey.ECC.EccPoint
-    ]  # base point   (or hex string representation)
-    h: typing.Union[
-        str, Crypto.PublicKey.ECC.EccPoint
-    ]  # random point (or hex string representation)
+    g: str  # base point   (or hex string representation)
+    h: str  # random point (or hex string representation)
 
     # Returns serialized commitments
-    commitments: typing.Opional[
-        typing.Dict[str, typing.List[typing.Union[str, Crypto.PublicKey.ECC.EccPoint]]]
+    commitments: typing.Optional[
+        typing.Dict[str, typing.List[str]]
     ] = None  # the commitment to the data
     merkle_root: typing.Optional[str] = None  # the merkle root of the data
 
@@ -58,7 +56,6 @@ class Challenge(bt.Synapse):
                 typing.Union[
                     int,  # index, random_value
                     str,  # hex point representation
-                    Crypto.PublicKey.ECC.EccPoint,  # point
                     bytes,  # data chunk
                     typing.List[typing.Tuple[str, str]],  # merkle proof
                 ],

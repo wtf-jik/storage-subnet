@@ -1,5 +1,7 @@
+import os
 import json
 import base64
+import binascii
 
 from Crypto.Random import random
 from Crypto.Cipher import AES

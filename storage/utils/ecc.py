@@ -1,3 +1,4 @@
+import binascii
 import hashlib
 from Crypto.Random import random
 from Crypto.PublicKey import ECC
@@ -11,10 +12,10 @@ def hash_data(data):
     return int(h, 16)
 
 
-def setup_CRS():
-    curve = ECC.generate(curve="P-256")
-    g = curve.pointQ  # Base point
-    h = ECC.generate(curve="P-256").pointQ  # Another random point
+def setup_CRS(curve="P-256"):
+    curve_obj = ECC.generate(curve=curve)
+    g = curve_obj.pointQ  # Base point
+    h = ECC.generate(curve=curve).pointQ  # Another random point
     return g, h
 
 
