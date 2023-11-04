@@ -57,6 +57,7 @@ from storage.utils import (
 )
 from storage import protocol
 
+
 def get_config():
     # Step 2: Set up the configuration parser
     # This function initializes the necessary command-line arguments.
@@ -137,7 +138,7 @@ def commit_data(committer, data_chunks):
         merkle_proof = merkle_tree.get_proof(commitment["index"])
         commitment["merkle_proof"] = merkle_proof
 
-    return commitments, merkle_tree #.get_merkle_root()
+    return commitments, merkle_tree  # .get_merkle_root()
 
 
 # Recommit data and send back to validator (miner side)
@@ -163,7 +164,6 @@ def recommit_data(committer, challenge_indices, merkle_tree, data):
         merkle_tree.update_leaf(i, ecc_point_to_hex(c))
     new_merkle_root = merkle_tree.get_merkle_root()
     return new_merkle_root, new_commitments
-
 
 
 def GetSynapse(config):
