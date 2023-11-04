@@ -190,7 +190,7 @@ class MerkleTreeSerializer:
         return m_tree
 
 
-if False:
+if True:
     # Usage Example:
     # Given a MerkleTree instance 'm_tree'
     m_tree = MerkleTree()

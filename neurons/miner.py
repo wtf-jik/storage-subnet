@@ -38,8 +38,10 @@ from pprint import pprint, pformat
 import storage
 from storage.utils import (
     hash_data,
+    setup_CRS,
     chunk_data,
     MerkleTree,
+    MerkleTreeSerializer,
     ECCommitment,
     ecc_point_to_hex,
     hex_to_ecc_point,
@@ -47,6 +49,13 @@ from storage.utils import (
     deserialize_dict_with_bytes,
 )
 
+# TEMP validator utils
+from storage.utils import (
+    encrypt_data,
+    make_random_file,
+    get_random_chunksize,
+)
+from storage import protocol
 
 def get_config():
     # Step 2: Set up the configuration parser
@@ -128,7 +137,7 @@ def commit_data(committer, data_chunks):
         merkle_proof = merkle_tree.get_proof(commitment["index"])
         commitment["merkle_proof"] = merkle_proof
 
-    return commitments, merkle_tree.get_merkle_root()
+    return commitments, merkle_tree #.get_merkle_root()
 
 
 # Recommit data and send back to validator (miner side)
@@ -155,24 +164,6 @@ def recommit_data(committer, challenge_indices, merkle_tree, data):
     new_merkle_root = merkle_tree.get_merkle_root()
     return new_merkle_root, new_commitments
 
-
-# TEMP
-# import this repo
-from storage import protocol
-from storage.utils import (
-    hash_data,
-    setup_CRS,
-    chunk_data,
-    MerkleTree,
-    encrypt_data,
-    ECCommitment,
-    make_random_file,
-    get_random_chunksize,
-    ecc_point_to_hex,
-    hex_to_ecc_point,
-    serialize_dict_with_bytes,
-    deserialize_dict_with_bytes,
-)
 
 
 def GetSynapse(config):
@@ -314,11 +305,22 @@ def main(config):
 
         # Commit the data chunks based on the provided curve points
         committer = ECCommitment(g, h)
-        commitments, merkle_root = commit_data(committer, data_chunks)
-        # TODO: split into STORE and SEND_BACK dictionaries
+        commitments, merkle_tree = commit_data(committer, data_chunks)
+        merkle_root = merkle_tree.get_merkle_root()
         print("OG commitments:", commitments)
+
+        # TODO: split into STORE and SEND_BACK dictionaries for clarity
         # Store commitments in local storage indexed by the data hash
-        serialized_commitments = serialize_dict_with_bytes(copy.deepcopy(commitments))
+        commitments_copy = copy.deepcopy(commitments)
+
+        # TODO: serialize and store the merkle tree for later updating (recommitments)
+        serialized_merkle_tree = MerkleTreeSerializer().serialize(merkle_tree)
+        # miner_storage = {"commitments": commitments_copy, "merkle_tree": serialized_merkle_tree}
+        # print("unserialized storage:", miner_storage)
+        commitments_copy.append({"serialized_merkle_tree": serialized_merkle_tree})
+        serialized_commitments = serialize_dict_with_bytes(commitments_copy)
+        print("serialied storage:", serialized_commitments)
+
         # TODO: only need to store: (randomness values, merkle_proofs, data_chunks)
         database.set(synapse.data_hash, serialized_commitments)
 
