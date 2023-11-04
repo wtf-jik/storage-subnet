@@ -28,6 +28,7 @@ import base64
 import argparse
 import traceback
 import bittensor as bt
+from random import choice
 from Crypto.Random import get_random_bytes
 
 # import this repo
@@ -50,8 +51,29 @@ from storage.utils import (
 
 
 # TODO:
-def Challenge():
-    pass
+def Challenge(database):
+    keys = database.keys("*")
+    key_ = choice(keys)
+    data = database.get(key_)
+    data = decode_storage(data)
+    commitments = data["commitments"]
+    merkle_root = data["merkle_root"]
+    params = data["params"]
+    index = choice(range(len(commitments)))
+    commitment = commitments[index]
+
+    # We want to get back from the miner:
+    # - the data chunk itself (to prove they still have it)
+    # - the random value to open the commitment
+    # - the merkle proof for the data chunk
+
+    # TODO: maybe we additionally want a random challenge here on the original data?
+    # Perhaps verify they signed the data chunk with their wallet? (e.g. dendrite signature and axon verify?)
+    # Or a (data_chunk + <random_value|miner_key>) signature?
+    # This way we have 3 layers of security:
+    # - (1) the commitment + random value + original data to prove they have the data now
+    # - (2) the merkle proof to prove they stored it originally
+    # - (3) the data chunk signature to verify they also have the data (redundant with 1?)
 
 
 def StoreRandomData():
