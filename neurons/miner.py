@@ -175,6 +175,44 @@ from storage.utils import (
 )
 
 
+def GetSynapse(config):
+    # Setup CRS for this round of validation
+    g, h = setup_CRS(curve=config.curve)
+
+    # Make a random bytes file to test the miner
+    random_data = make_random_file(maxsize=config.maxsize)
+
+    # Random encryption key for now (never will decrypt)
+    key = get_random_bytes(32)  # 256-bit key
+
+    # Encrypt the data
+    encrypted_data, nonce, tag = encrypt_data(
+        random_data,
+        key,  # TODO: Use validator key as the encryption key?
+    )
+
+    # Convert to base64 for compactness
+    b64_encrypted_data = base64.b64encode(encrypted_data).decode("utf-8")
+
+    # Hash the encrypted data
+    data_hash = hash_data(encrypted_data)
+
+    # Chunk the data
+    chunk_size = get_random_chunksize()
+    # chunks = list(chunk_data(encrypted_data, chunksize))
+
+    syn = synapse = protocol.Store(
+        chunk_size=chunk_size,
+        encrypted_data=b64_encrypted_data,
+        data_hash=data_hash,
+        curve=config.curve,
+        g=ecc_point_to_hex(g),
+        h=ecc_point_to_hex(h),
+        size=sys.getsizeof(encrypted_data),
+    )
+    return synapse
+
+
 # Main takes the config and starts the miner.
 def main(config):
     # Activating Bittensor's logging with the set configurations.
@@ -277,9 +315,11 @@ def main(config):
         # Commit the data chunks based on the provided curve points
         committer = ECCommitment(g, h)
         commitments, merkle_root = commit_data(committer, data_chunks)
-
+        # TODO: split into STORE and SEND_BACK dictionaries
+        print("OG commitments:", commitments)
         # Store commitments in local storage indexed by the data hash
         serialized_commitments = serialize_dict_with_bytes(copy.deepcopy(commitments))
+        # TODO: only need to store: (randomness values, merkle_proofs, data_chunks)
         database.set(synapse.data_hash, serialized_commitments)
 
         # Do not send randomness values to the validator until challenged
@@ -290,6 +330,7 @@ def main(config):
             del commitment[
                 "merkle_proof"
             ]  # don't send back merkle proof until challenged
+            del commitment["data_chunk"]  # don't send back data chunk until challenged
 
         # Encode base64 so we can send less data over the wire
         serialized_commitments_return = base64.b64encode(
@@ -304,17 +345,59 @@ def main(config):
 
     def challenge(synapse: storage.protocol.Challenge) -> storage.protocol.Challenge:
         # Retrieve commitments from local storage
-        commitments = database.get(synapse.data_hash)
-        if commitments is None:
+        # data = database.get(synapse.challenge_hash) # Stored in bytestring format
+        data = database.get(syn.data_hash)
+        print("retrieved data:", data)
+        if data == None:
             bt.logging.error(
-                f"Commitments not found for data hash: {synapse.data_hash}"
+                f"Commitments not found for data hash: {synapse.challenge_hash}"
             )
             return synapse
+        data = deserialize_dict_with_bytes(data)  # deserialize from storage format
+        print("decoded data:", data)
+        challenge_data = data[synapse.challenge_index]
+        assert challenge_data["index"] == synapse.challenge_index
+        data_chunk = challenge_data["data_chunk"]
+        merkle_proof = challenge_data["merkle_proof"]
+        randomness = challenge_data["randomness"]
+        commitment = challenge_data["point"]
 
         # Recommit data and send back to validator (miner side)
+        # Generate new g, h params with same curve to recommit
         committer = ECCommitment(synapse.g, synapse.h)
+        new_merkle_root, new_commitments = recommit_data(
+            committer, [synapse.challenge_index], MerkleTree(merkle_proof), data_chunk
+        )
+        data[synapse.challenge_index]
 
         return synapse
+
+    syn = GetSynapse(config)
+    response = store(syn)
+    import json
+
+    key = f"{response.data_hash}.{response.axon.hotkey}"  # or UUID?
+    setup_params = {"g": syn.g, "h": syn.h, "curve": syn.curve}
+    setup_params_base64 = base64.b64encode(
+        serialize_dict_with_bytes([setup_params]).encode()
+    ).decode("utf-8")
+    # Package up the required data into a dict
+    response_storage = {
+        "commitments": response.commitments,
+        "merkle_root": response.merkle_root,
+        "params": setup_params_base64,
+    }
+    # encode the response_storage dict as base64
+    response_storage_encoded = base64.b64encode(
+        json.dumps(response_storage).encode()
+    ).decode("utf-8")
+    # Store in the database according to the data hash and the miner hotkey
+
+    database.set(key, response_storage_encoded)
+    print("Stored data in database", key, response_storage_encoded)
+    import pdb
+
+    pdb.set_trace()
 
     # Step 6: Build and link miner functions to the axon.
     # The axon handles request processing, allowing validators to send this process requests.

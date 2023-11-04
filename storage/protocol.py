@@ -46,7 +46,8 @@ class Store(bt.Synapse):
 
 class Challenge(bt.Synapse):
     # Receives
-    challenge_indices: typing.List[int]  # list of block indices to challenge
+    challenge_hash: str  # hash of the data to challenge
+    challenge_index: int  # block indices to challenge
 
     # Returns
     responses: typing.Optional[

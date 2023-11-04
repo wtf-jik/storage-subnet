@@ -23,3 +23,20 @@ def query_data(hash_key):
 # insert_data('somehashkey', b'encrypted_bytes_here')
 # data = query_data('somehashkey')
 # print(data)
+
+# Fetch all keys
+all_keys = r.keys("*")
+
+# Print all keys
+for key in all_keys:
+    print(key)
+
+# All keys is expensive, try batched scan instead
+# Initialize the scan cursor and match pattern
+cursor = "0"
+match = "*"
+
+while cursor != 0:
+    cursor, keys = r.scan(cursor=cursor, match=match)
+    for key in keys:
+        print(key)
