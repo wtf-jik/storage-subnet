@@ -397,9 +397,11 @@ print("All chunks validated successfuly!")
 
 
 def verify(committer, commitments, merkle_root):
+    print("COMMITMENTS IN VERIFY:", commitments)
     for commitment_i in commitments:
         index = commitment_i["index"]
         commitment = commitment_i["point"]
+        print("commitment point:", commitment)
         data = commitment_i["data_chunk"]
         r = commitment_i["randomness"]
         merkle_proof_i = commitment_i["merkle_proof"]

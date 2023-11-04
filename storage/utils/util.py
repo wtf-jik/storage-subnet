@@ -9,9 +9,12 @@ from Crypto.Random import random
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 
+from .ecc import hex_to_ecc_point
+from .merkle import MerkleTree
+
 
 def make_random_file(name=None, maxsize=1024):
-    size = random.randint(32, maxsize)
+    size = random.randint(128, maxsize)
     data = os.urandom(size)
     if isinstance(name, str):
         with open(name, "wb") as fout:
@@ -28,6 +31,25 @@ def get_random_chunksize(maxsize=128):
 def chunk_data(data, chunksize: int):
     for i in range(0, len(data), chunksize):
         yield data[i : i + chunksize]
+
+
+def is_hex_str(s):
+    """
+    Check if the input string is a valid hexadecimal string.
+
+    :param s: The string to check
+    :return: True if s is a valid hexadecimal string, False otherwise
+    """
+    # A valid hex string must have an even number of characters
+    if len(s) % 2 != 0:
+        return False
+
+    # Check if each character is a valid hex character
+    try:
+        int(s, 16)
+        return True
+    except ValueError:
+        return False
 
 
 def encrypt_data(filename, key):
@@ -125,6 +147,41 @@ def decode_storage(encoded_storage):
         base64.b64decode(dict_storage["params"]).decode("utf-8")
     )
     return dict_storage
+
+
+def b64_encode(data):
+    if isinstance(data, list) and isinstance(data[0], bytes):
+        data = [d.hex() for d in data]
+    if isinstance(data, dict) and isinstance(data[list(data.keys())[0]], bytes):
+        data = {k: v.hex() for k, v in data.items()}
+    return base64.b64encode(json.dumps(data).encode()).decode("utf-8")
+
+
+def b64_decode(data, decode_hex=False):
+    data = data.decode("utf-8") if isinstance(data, bytes) else data
+    decoded_data = json.loads(base64.b64decode(data).decode("utf-8"))
+    if decode_hex:
+        try:
+            decoded_data = (
+                [bytes.fromhex(d) for d in decoded_data]
+                if isinstance(decoded_data, list)
+                else {k: bytes.fromhex(v) for k, v in decoded_data.items()}
+            )
+        except:
+            pass
+    return decoded_data
+
+
+def decode_miner_storage(encoded_storage, curve):
+    xy = json.loads(encoded_storage.decode("utf-8"))
+    print("xy:", xy)
+    xz = {
+        k: b64_decode(v, decode_hex=True if k != "commitments" else False)
+        for k, v in xy.items()
+    }
+    xz["commitments"] = [hex_to_ecc_point(c, curve) for c in xz["commitments"]]
+    xz["merkle_tree"] = MerkleTree().deserialize(xz["merkle_tree"])
+    return xz
 
 
 def GetSynapse(config):

@@ -22,6 +22,7 @@
 import os
 import sys
 import copy
+import json
 import time
 import redis
 import typing
@@ -45,6 +46,9 @@ from storage.utils import (
     ECCommitment,
     ecc_point_to_hex,
     hex_to_ecc_point,
+    b64_encode,
+    b64_decode,
+    decode_miner_storage,
     serialize_dict_with_bytes,
     deserialize_dict_with_bytes,
 )
@@ -141,6 +145,24 @@ def commit_data(committer, data_chunks):
     return commitments, merkle_tree  # .get_merkle_root()
 
 
+def commit_data2(committer, data_chunks, n_chunks):
+    merkle_tree = MerkleTree()
+
+    # Commit each chunk of data
+    randomness, chunks, points = [None] * n_chunks, [None] * n_chunks, [None] * n_chunks
+    for index, chunk in enumerate(data_chunks):
+        c, m_val, r = committer.commit(chunk)
+        c_hex = ecc_point_to_hex(c)
+        randomness[index] = r
+        chunks[index] = chunk
+        points[index] = c_hex
+        merkle_tree.add_leaf(c_hex)
+
+    # Create the tree from the leaves
+    merkle_tree.make_tree()
+    return randomness, chunks, points, merkle_tree
+
+
 # Recommit data and send back to validator (miner side)
 def recommit_data(committer, challenge_indices, merkle_tree, data):
     # TODO: Store the g,h values in the database so we can retrieve them later
@@ -190,7 +212,7 @@ def GetSynapse(config):
 
     # Chunk the data
     chunk_size = get_random_chunksize()
-    # chunks = list(chunk_data(encrypted_data, chunksize))
+    chunks = list(chunk_data(encrypted_data, chunk_size))
 
     syn = synapse = protocol.Store(
         chunk_size=chunk_size,
@@ -200,6 +222,7 @@ def GetSynapse(config):
         g=ecc_point_to_hex(g),
         h=ecc_point_to_hex(h),
         size=sys.getsizeof(encrypted_data),
+        n_chunks=len(chunks),
     )
     return synapse
 
@@ -305,44 +328,28 @@ def main(config):
 
         # Commit the data chunks based on the provided curve points
         committer = ECCommitment(g, h)
-        commitments, merkle_tree = commit_data(committer, data_chunks)
-        merkle_root = merkle_tree.get_merkle_root()
-        print("OG commitments:", commitments)
+        # commitments, merkle_tree = commit_data(committer, data_chunks)
+        randomness, chunks, points, merkle_tree = commit_data2(
+            committer, data_chunks, synapse.n_chunks
+        )
 
-        # TODO: split into STORE and SEND_BACK dictionaries for clarity
-        # Store commitments in local storage indexed by the data hash
-        commitments_copy = copy.deepcopy(commitments)
+        # store (randomness values, merkle tree, commitments, data chunks)
+        miner_store = {
+            "randomness": b64_encode(randomness),
+            "data_chunks": b64_encode(chunks),
+            "commitments": b64_encode(points),
+            "merkle_tree": b64_encode(merkle_tree.serialize()),
+        }
+        dumped = json.dumps(miner_store).encode()
+        database.set(synapse.data_hash, dumped)
 
-        # TODO: serialize and store the merkle tree for later updating (recommitments)
-        serialized_merkle_tree = MerkleTreeSerializer().serialize(merkle_tree)
-        # miner_storage = {"commitments": commitments_copy, "merkle_tree": serialized_merkle_tree}
-        # print("unserialized storage:", miner_storage)
-        commitments_copy.append({"serialized_merkle_tree": serialized_merkle_tree})
-        serialized_commitments = serialize_dict_with_bytes(commitments_copy)
-        print("serialied storage:", serialized_commitments)
+        # Verify retrieval and decoding
+        encoded_storage = database.get(synapse.data_hash)
+        decoded_storage = decode_miner_storage(encoded_storage, synapse.curve)
 
-        # TODO: only need to store: (randomness values, merkle_proofs, data_chunks)
-        database.set(synapse.data_hash, serialized_commitments)
-
-        # Do not send randomness values to the validator until challenged
-        for commitment in commitments:
-            del commitment[
-                "randomness"
-            ]  # don't send back random value until challenged
-            del commitment[
-                "merkle_proof"
-            ]  # don't send back merkle proof until challenged
-            del commitment["data_chunk"]  # don't send back data chunk until challenged
-
-        # Encode base64 so we can send less data over the wire
-        serialized_commitments_return = base64.b64encode(
-            serialize_dict_with_bytes(commitments).encode()
-        ).decode("utf-8")
-
-        # Return the commitments and merkle root
-        synapse.commitments = serialized_commitments_return
-        synapse.merkle_root = merkle_root
-
+        # Prepare return values to validator
+        encoded_commitments = miner_store["commitments"]
+        synapse.merkle_root = merkle_tree.get_merkle_root()
         return synapse
 
     def challenge(synapse: storage.protocol.Challenge) -> storage.protocol.Challenge:
@@ -376,30 +383,6 @@ def main(config):
 
     syn = GetSynapse(config)
     response = store(syn)
-    import json
-
-    key = f"{response.data_hash}.{response.axon.hotkey}"  # or UUID?
-    setup_params = {"g": syn.g, "h": syn.h, "curve": syn.curve}
-    setup_params_base64 = base64.b64encode(
-        serialize_dict_with_bytes([setup_params]).encode()
-    ).decode("utf-8")
-    # Package up the required data into a dict
-    response_storage = {
-        "commitments": response.commitments,
-        "merkle_root": response.merkle_root,
-        "params": setup_params_base64,
-    }
-    # encode the response_storage dict as base64
-    response_storage_encoded = base64.b64encode(
-        json.dumps(response_storage).encode()
-    ).decode("utf-8")
-    # Store in the database according to the data hash and the miner hotkey
-
-    database.set(key, response_storage_encoded)
-    print("Stored data in database", key, response_storage_encoded)
-    import pdb
-
-    pdb.set_trace()
 
     # Step 6: Build and link miner functions to the axon.
     # The axon handles request processing, allowing validators to send this process requests.
