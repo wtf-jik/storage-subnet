@@ -20,6 +20,8 @@
 
 # Step 1: Import necessary libraries and modules
 import os
+import sys
+import copy
 import time
 import redis
 import typing
@@ -28,6 +30,9 @@ import argparse
 import traceback
 import bittensor as bt
 from collections import defaultdict
+from Crypto.Random import get_random_bytes
+
+from pprint import pprint, pformat
 
 # import this repo
 import storage
@@ -51,6 +56,18 @@ def get_config():
     # TODO(developer): Adds your custom miner arguments to the parser.
     parser.add_argument(
         "--custom", default="my_custom_value", help="Adds a custom value to the parser."
+    )
+    parser.add_argument(
+        "--curve",
+        default="P-256",
+        help="Curve for elliptic curve cryptography.",
+        choices=["P-256"],  # TODO: expand this list
+    )
+    parser.add_argument(
+        "--maxsize",
+        default=128,
+        type=int,
+        help="Maximum size of random data to store.",
     )
     # Adds override arguments for network and netuid.
     parser.add_argument("--netuid", type=int, default=1, help="The chain subnet uid.")
@@ -89,12 +106,15 @@ def commit_data(committer, data_chunks):
 
     # Commit each chunk of data
     for index, chunk in enumerate(data_chunks):
+        print("CHUNK", chunk)
         c, m_val, r = committer.commit(chunk)
         commitments[index] = {
             "index": index,
             "hash": m_val,
             "data_chunk": chunk,
-            "point": c,
+            "point": ecc_point_to_hex(
+                c
+            ),  # hex representation for sending back to validator
             "randomness": r,
             "merkle_proof": None,
         }
@@ -134,6 +154,63 @@ def recommit_data(committer, challenge_indices, merkle_tree, data):
         merkle_tree.update_leaf(i, ecc_point_to_hex(c))
     new_merkle_root = merkle_tree.get_merkle_root()
     return new_merkle_root, new_commitments
+
+
+# TEMP
+# import this repo
+from storage import protocol
+from storage.utils import (
+    hash_data,
+    setup_CRS,
+    chunk_data,
+    MerkleTree,
+    encrypt_data,
+    ECCommitment,
+    make_random_file,
+    get_random_chunksize,
+    ecc_point_to_hex,
+    hex_to_ecc_point,
+    serialize_dict_with_bytes,
+    deserialize_dict_with_bytes,
+)
+
+
+def GetSynapse(config):
+    # Setup CRS for this round of validation
+    g, h = setup_CRS(curve=config.curve)
+
+    # Make a random bytes file to test the miner
+    random_data = make_random_file(maxsize=config.maxsize)
+
+    # Random encryption key for now (never will decrypt)
+    key = get_random_bytes(32)  # 256-bit key
+
+    # Encrypt the data
+    encrypted_data, nonce, tag = encrypt_data(
+        random_data,
+        key,  # TODO: Use validator key as the encryption key?
+    )
+
+    # Convert to base64 for compactness
+    b64_encrypted_data = base64.b64encode(encrypted_data).decode("utf-8")
+
+    # Hash the encrypted data
+    data_hash = hash_data(encrypted_data)
+
+    # Chunk the data
+    chunk_size = get_random_chunksize()
+    # chunks = list(chunk_data(encrypted_data, chunksize))
+
+    syn = synapse = protocol.Store(
+        chunk_size=chunk_size,
+        encrypted_data=b64_encrypted_data,
+        data_hash=data_hash,
+        curve=config.curve,
+        g=ecc_point_to_hex(g),
+        h=ecc_point_to_hex(h),
+        size=sys.getsizeof(encrypted_data),
+    )
+    return synapse
 
 
 # Main takes the config and starts the miner.
@@ -240,11 +317,11 @@ def main(config):
         commitments, merkle_root = commit_data(committer, data_chunks)
 
         # Store commitments in local storage indexed by the data hash
-        serialized_commitments = serialize_dict_with_bytes(commitments)
+        serialized_commitments = serialize_dict_with_bytes(copy.deepcopy(commitments))
         database.set(synapse.data_hash, serialized_commitments)
 
         # Do not send randomness values to the validator until challenged
-        for commitment in commitments:
+        for index, commitment in commitments.items():
             del commitment["randomness"]
 
         # Encode base64 so we can send less data over the wire
@@ -280,15 +357,19 @@ def main(config):
     # Attach determiners which functions are called when servicing a request.
     bt.logging.info(f"Attaching forward function to axon.")
     axon.attach(
-        forward_fn=dummy,
-        blacklist_fn=blacklist_fn,
-        priority_fn=priority_fn,
+        forward_fn=store,
+        # blacklist_fn=blacklist_fn,
+        # priority_fn=priority_fn,
+    ).attach(
+        forward_fn=challenge,
+        # blacklist_fn=blacklist_fn,
+        # priority_fn=priority_fn,
     )
 
     # Serve passes the axon information to the network + netuid we are hosting on.
     # This will auto-update if the axon port of external ip have changed.
     bt.logging.info(
-        f"Serving axon {dummy} on network: {config.subtensor.chain_endpoint} with netuid: {config.netuid}"
+        f"Serving axon {store} on network: {subtensor.chain_endpoint} with netuid: {config.netuid}"
     )
     axon.serve(netuid=config.netuid, subtensor=subtensor)
 

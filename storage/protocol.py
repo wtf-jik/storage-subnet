@@ -34,13 +34,13 @@ class Store(bt.Synapse):
 
     # Setup parameters
     curve: str  # e.g. P-256
-    g: str  # base point   (or hex string representation)
-    h: str  # random point (or hex string representation)
+    g: str  # base point   (hex string representation)
+    h: str  # random point (hex string representation)
 
     # Returns serialized commitments
     commitments: typing.Optional[
-        typing.Dict[str, typing.List[str]]
-    ] = None  # the commitment to the data
+        str
+    ] = None  # base64 encoded string of serialized commitments dict
     merkle_root: typing.Optional[str] = None  # the merkle root of the data
 
 

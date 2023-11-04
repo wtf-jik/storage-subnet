@@ -2,6 +2,8 @@ import os
 import json
 import base64
 import binascii
+from collections import defaultdict
+from typing import Dict, List, Any
 
 from Crypto.Random import random
 from Crypto.Cipher import AES
@@ -58,34 +60,56 @@ def encrypt_data(filename, key):
     return cipher_text, cipher.nonce, tag
 
 
-# Function to serialize a dictionary with bytes
-def serialize_dict_with_bytes(data):
-    def encode(item):
-        if isinstance(item, bytes):
-            return base64.b64encode(item).decode("utf-8")
-        elif isinstance(item, dict):
-            return {k: encode(v) for k, v in item.items()}
-        elif isinstance(item, list):
-            return [encode(element) for element in item]
-        else:
-            return item
+def serialize_dict_with_bytes(commitments: Dict[int, Dict[str, Any]]) -> str:
+    # Convert our custom objects to serializable objects
+    for index, commitment in commitments.items():
+        # Check if 'point' is a bytes-like object, if not, it's already a string (hex)
+        if isinstance(commitment["point"], bytes):
+            commitment["point"] = commitment["point"].hex()
 
-    return json.dumps({k: encode(v) for k, v in data.items()})
+        if commitment["data_chunk"] is not None:
+            commitment["data_chunk"] = commitment["data_chunk"].hex()
+
+        # Similarly, check for 'merkle_proof' and convert if necessary
+        if commitment["merkle_proof"] is not None:
+            serialized_merkle_proof = []
+            for proof in commitment["merkle_proof"]:
+                serialized_proof = {}
+                for side, value in proof.items():
+                    # Check if value is a bytes-like object, if not, it's already a string (hex)
+                    if isinstance(value, bytes):
+                        serialized_proof[side] = value.hex()
+                    else:
+                        serialized_proof[side] = value
+                serialized_merkle_proof.append(serialized_proof)
+            commitment["merkle_proof"] = serialized_merkle_proof
+
+        # Randomness is an integer and should be safely converted to string without checking type
+        if commitment.get("randomness"):
+            commitment["randomness"] = str(commitment["randomness"])
+
+    # Convert the entire structure to JSON
+    return json.dumps(commitments)
 
 
-# Function to deserialize a dictionary with bytes
-def deserialize_dict_with_bytes(data):
-    def decode(item):
-        if isinstance(item, str):
-            try:
-                return base64.b64decode(item)
-            except (TypeError, ValueError):
-                return item
-        elif isinstance(item, dict):
-            return {k: decode(v) for k, v in item.items()}
-        elif isinstance(item, list):
-            return [decode(element) for element in item]
-        else:
-            return item
+# Deserializer function
+def deserialize_dict_with_bytes(serialized: str) -> Dict[int, Dict[str, Any]]:
+    def hex_to_bytes(hex_str: str) -> bytes:
+        return bytes.fromhex(hex_str)
 
-    return {k: decode(v) for k, v in json.loads(data).items()}
+    def deserialize_helper(d: Dict[str, Any]) -> Dict[str, Any]:
+        for key, value in d.items():
+            if key == "data_chunk":
+                d[key] = hex_to_bytes(value)
+            # elif key == 'point':
+            #     d[key] = hex_to_bytes(value)
+            elif key == "randomness":
+                d[key] = int(value)
+            elif key == "merkle_proof" and value is not None:
+                d[key] = [{k: v for k, v in item.items()} for item in value]
+        return d
+
+    # Parse the JSON string back to a dictionary
+    commitments = json.loads(serialized, object_hook=deserialize_helper)
+    # Convert the parsed dictionary keys back to integers
+    return {int(k): v for k, v in commitments.items()}
