@@ -114,38 +114,7 @@ def get_config():
     return config
 
 
-def commit_data(committer, data_chunks):
-    merkle_tree = MerkleTree()
-    commitments = []
-
-    # Commit each chunk of data
-    for index, chunk in enumerate(data_chunks):
-        c, m_val, r = committer.commit(chunk)
-        c_hex = ecc_point_to_hex(c)
-        commitments.append(
-            {
-                "index": index,
-                "hash": m_val,
-                "data_chunk": chunk,
-                "point": c_hex,
-                "randomness": r,
-                "merkle_proof": None,
-            }
-        )
-        merkle_tree.add_leaf(c_hex)
-
-    # Create the tree from the leaves
-    merkle_tree.make_tree()
-
-    # Get the merkle proof for each commitment
-    for commitment in commitments:
-        merkle_proof = merkle_tree.get_proof(commitment["index"])
-        commitment["merkle_proof"] = merkle_proof
-
-    return commitments, merkle_tree  # .get_merkle_root()
-
-
-def commit_data2(committer, data_chunks, n_chunks):
+def commit_data(committer, data_chunks, n_chunks):
     merkle_tree = MerkleTree()
 
     # Commit each chunk of data
@@ -329,7 +298,7 @@ def main(config):
         # Commit the data chunks based on the provided curve points
         committer = ECCommitment(g, h)
         # commitments, merkle_tree = commit_data(committer, data_chunks)
-        randomness, chunks, points, merkle_tree = commit_data2(
+        randomness, chunks, points, merkle_tree = commit_data(
             committer, data_chunks, synapse.n_chunks
         )
 
@@ -354,8 +323,8 @@ def main(config):
 
     def challenge(synapse: storage.protocol.Challenge) -> storage.protocol.Challenge:
         # Retrieve commitments from local storage
-        # data = database.get(synapse.challenge_hash) # Stored in bytestring format
-        data = database.get(syn.data_hash)
+        data = database.get(synapse.challenge_hash)  # Stored in bytestring format
+        # data = database.get(syn.data_hash)
         print("retrieved data:", data)
         if data == None:
             bt.logging.error(
@@ -383,7 +352,25 @@ def main(config):
 
     syn = GetSynapse(config)
     response = store(syn)
+    cyn = protocol.Challenge(
+        challenge_hash=syn.data_hash, challenge_index=0, curve="P-256"
+    )
+    data = database.get(cyn.challenge_hash)
+    print("retrieved data:", data)
 
+    dd = decoded_data = decode_miner_storage(data, syn.curve)
+    ddata = json.loads(data.decode("utf-8"))
+    print("decoded data:", ddata)
+
+    cyn.commitment = ecc_point_to_hex(dd["commitments"][cyn.challenge_index])
+    cyn.random_value = dd["randomness"][cyn.challenge_index]
+    cyn.merkle_root = dd["merkle_tree"].get_merkle_root()
+    cyn.data_chunk = dd["data_chunks"][cyn.challenge_index]
+    cyn.merkle_proof = dd["merkle_tree"].get_proof(cyn.challenge_index)
+
+    import pdb
+
+    pdb.set_trace()
     # Step 6: Build and link miner functions to the axon.
     # The axon handles request processing, allowing validators to send this process requests.
     axon = bt.axon(wallet=wallet, config=config)

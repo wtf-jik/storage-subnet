@@ -50,7 +50,7 @@ class Challenge(bt.Synapse):
     # Receives
     challenge_hash: str  # hash of the data to challenge
     challenge_index: int  # block indices to challenge
-
+    curve: str
     # Returns
     # - commitment (point represented as hex string)
     # - data chunk (base64 encoded string of bytes)
@@ -58,10 +58,13 @@ class Challenge(bt.Synapse):
     # - merkle proof (List[Dict[<left|right>, hex strings])
     # - merkle root (hex string)
     commitment: typing.Optional[str] = None
-    data_chunk: typing.Optional[str] = None
+    data_chunk: typing.Optional[bytes] = None
     random_value: typing.Optional[int] = None
     merkle_proof: typing.Optional[typing.List[typing.Dict[str, str]]] = None
     merkle_root: typing.Optional[str] = None
+    b64string: typing.Optional[
+        str
+    ] = None  # Contains everything you need as a dict: {'commitment': commitment, 'data_chunk': data_chunk, 'random_value': random_value, 'merkle_proof': merkle_proof, 'merkle_root': merkle_root}
 
     # responses: typing.Optional[
     #     typing.List[

@@ -52,6 +52,7 @@ from storage.utils import (
 
 # TODO:
 def Challenge(database):
+    database = redis.StrictRedis(host="localhost", port=6379, db=0)
     keys = database.keys("*")
     store_keys = [
         "abc.123",

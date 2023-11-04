@@ -174,7 +174,6 @@ def b64_decode(data, decode_hex=False):
 
 def decode_miner_storage(encoded_storage, curve):
     xy = json.loads(encoded_storage.decode("utf-8"))
-    print("xy:", xy)
     xz = {
         k: b64_decode(v, decode_hex=True if k != "commitments" else False)
         for k, v in xy.items()
