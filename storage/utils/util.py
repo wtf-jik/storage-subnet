@@ -62,16 +62,16 @@ def encrypt_data(filename, key):
 
 def serialize_dict_with_bytes(commitments: Dict[int, Dict[str, Any]]) -> str:
     # Convert our custom objects to serializable objects
-    for index, commitment in commitments.items():
+    for commitment in commitments:
         # Check if 'point' is a bytes-like object, if not, it's already a string (hex)
-        if isinstance(commitment["point"], bytes):
+        if isinstance(commitment.get("point"), bytes):
             commitment["point"] = commitment["point"].hex()
 
-        if commitment["data_chunk"] is not None:
+        if commitment.get("data_chunk"):
             commitment["data_chunk"] = commitment["data_chunk"].hex()
 
         # Similarly, check for 'merkle_proof' and convert if necessary
-        if commitment["merkle_proof"] is not None:
+        if commitment.get("merkle_proof"):
             serialized_merkle_proof = []
             for proof in commitment["merkle_proof"]:
                 serialized_proof = {}
@@ -101,8 +101,6 @@ def deserialize_dict_with_bytes(serialized: str) -> Dict[int, Dict[str, Any]]:
         for key, value in d.items():
             if key == "data_chunk":
                 d[key] = hex_to_bytes(value)
-            # elif key == 'point':
-            #     d[key] = hex_to_bytes(value)
             elif key == "randomness":
                 d[key] = int(value)
             elif key == "merkle_proof" and value is not None:
@@ -110,6 +108,20 @@ def deserialize_dict_with_bytes(serialized: str) -> Dict[int, Dict[str, Any]]:
         return d
 
     # Parse the JSON string back to a dictionary
-    commitments = json.loads(serialized, object_hook=deserialize_helper)
-    # Convert the parsed dictionary keys back to integers
-    return {int(k): v for k, v in commitments.items()}
+    return json.loads(serialized, object_hook=deserialize_helper)
+
+
+def decode_commitments(encoded_commitments):
+    decoded_commitments = base64.b64decode(encoded_commitments)
+    commitments = deserialize_dict_with_bytes(decoded_commitments)
+    return commitments
+
+
+def decode_storage(encoded_storage):
+    decoded_storage = base64.b64decode(encoded_storage).decode("utf-8")
+    dict_storage = json.loads(decoded_storage)
+    dict_storage["commitments"] = decode_commitments(dict_storage["commitments"])
+    dict_storage["params"] = json.loads(
+        base64.b64decode(dict_storage["params"]).decode("utf-8")
+    )
+    return dict_storage

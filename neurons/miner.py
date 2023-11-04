@@ -102,31 +102,31 @@ def get_config():
 
 def commit_data(committer, data_chunks):
     merkle_tree = MerkleTree()
-    commitments = defaultdict(lambda: [None] * len(data_chunks))
+    commitments = []
 
     # Commit each chunk of data
     for index, chunk in enumerate(data_chunks):
-        print("CHUNK", chunk)
         c, m_val, r = committer.commit(chunk)
-        commitments[index] = {
-            "index": index,
-            "hash": m_val,
-            "data_chunk": chunk,
-            "point": ecc_point_to_hex(
-                c
-            ),  # hex representation for sending back to validator
-            "randomness": r,
-            "merkle_proof": None,
-        }
-        merkle_tree.add_leaf(ecc_point_to_hex(c))
+        c_hex = ecc_point_to_hex(c)
+        commitments.append(
+            {
+                "index": index,
+                "hash": m_val,
+                "data_chunk": chunk,
+                "point": c_hex,
+                "randomness": r,
+                "merkle_proof": None,
+            }
+        )
+        merkle_tree.add_leaf(c_hex)
 
     # Create the tree from the leaves
     merkle_tree.make_tree()
 
     # Get the merkle proof for each commitment
-    for index, commitment in commitments.items():
-        merkle_proof = merkle_tree.get_proof(index)
-        commitments[index]["merkle_proof"] = merkle_proof
+    for commitment in commitments:
+        merkle_proof = merkle_tree.get_proof(commitment["index"])
+        commitment["merkle_proof"] = merkle_proof
 
     return commitments, merkle_tree.get_merkle_root()
 
@@ -321,7 +321,7 @@ def main(config):
         database.set(synapse.data_hash, serialized_commitments)
 
         # Do not send randomness values to the validator until challenged
-        for index, commitment in commitments.items():
+        for commitment in commitments:
             del commitment["randomness"]
 
         # Encode base64 so we can send less data over the wire

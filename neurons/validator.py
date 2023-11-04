@@ -22,6 +22,7 @@
 import os
 import sys
 import time
+import redis
 import torch
 import base64
 import argparse
@@ -44,7 +45,13 @@ from storage.utils import (
     hex_to_ecc_point,
     serialize_dict_with_bytes,
     deserialize_dict_with_bytes,
+    decode_storage,
 )
+
+
+# TODO:
+def Challenge():
+    pass
 
 
 def StoreRandomData():
@@ -82,10 +89,8 @@ def StoreRandomData():
         h=ecc_point_to_hex(h),
         size=sys.getsizeof(encrypted_data),
     )
-    print("synapse:", synapse)
-    import pdb
 
-    pdb.set_trace()
+    # TODO: select subset of miners to query (e.g. redunancy factor of N)
     # Broadcast a query to all miners on the network.
     responses = dendrite.query(
         metagraph.axons,
@@ -93,15 +98,30 @@ def StoreRandomData():
         deserialize=True,
     )
 
-    # TODO: Store data params in Redis or GUNdb
-    setup_params = {
-        "g": g,
-        "h": h,
-        "curve": config.curve,
-    }
-
     # Log the results for monitoring purposes.
     bt.logging.info(f"Received responses: {responses}")
+
+    # TODO: Store data params in GUNdb instead of Redis
+    setup_params = {"g": g, "h": h, "curve": config.curve}
+    setup_params_base64 = base64.b64encode(
+        serialize_dict_with_bytes([setup_params]).encode()
+    ).decode("utf-8")
+
+    for response in responses:
+        # TODO: come up with better key mapping (merkle root based?)
+        key = f"{response.data_hash}.{response.axon.hotkey}"  # or UUID?
+        # Package up the required data into a dict
+        response_storage = {
+            "commitments": response.commitments,
+            "merkle_root": response.merkle_root,
+            "params": setup_params_base64,
+        }
+        # encode the response_storage dict as base64
+        response_storage_encoded = base64.b64encode(
+            json.dumps(response_storage).encode()
+        ).decode("utf-8")
+        # Store in the database according to the data hash and the miner hotkey
+        database.set(key, response_storage)
 
 
 # Step 2: Set up the configuration parser
@@ -123,6 +143,12 @@ def get_config():
         default=128,
         type=int,
         help="Maximum size of random data to store.",
+    )
+    parser.add_argument(
+        "--redundancy",
+        type=int,
+        default=3,
+        help="Number of miners to store each piece of data on.",
     )
     # Adds override arguments for network and netuid.
     parser.add_argument("--netuid", type=int, default=1, help="The chain subnet uid.")
@@ -153,11 +179,6 @@ def get_config():
 
     # Return the parsed config.
     return config
-
-
-config = get_config()
-
-StoreRandomData()
 
 
 def main(config):
