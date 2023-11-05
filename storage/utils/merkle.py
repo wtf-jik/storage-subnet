@@ -13,6 +13,11 @@ class MerkleTree(object):
 
         self.reset_tree()
 
+    def __eq__(self, other):
+        if not isinstance(other, MerkleTree):
+            return False
+        return self.serialize() == other.serialize()
+
     def _to_hex(self, x):
         try:  # python3
             return x.hex()
@@ -182,66 +187,3 @@ def validate_merkle_proof(proof, target_hash, merkle_root, hash_type="sha3_256")
                 sibling = bytearray.fromhex(p["right"])
                 proof_hash = hash_func(proof_hash + sibling).digest()
         return proof_hash == merkle_root
-
-
-class MerkleTreeSerializer:
-    @staticmethod
-    def serialize(m_tree):
-        """
-        Serializes the MerkleTree object into a JSON string.
-        """
-        if not isinstance(m_tree, MerkleTree):
-            raise ValueError("m_tree must be an instance of MerkleTree")
-
-        # Convert the bytearray leaves and levels to hex strings for serialization
-        leaves = [m_tree._to_hex(leaf) for leaf in m_tree.leaves]
-        levels = None
-        if m_tree.levels is not None:
-            levels = []
-            for level in m_tree.levels:
-                levels.append([m_tree._to_hex(item) for item in level])
-
-        # Construct a dictionary with the MerkleTree properties
-        merkle_tree_data = {
-            "leaves": leaves,
-            "levels": levels,
-            "is_ready": m_tree.is_ready,
-        }
-
-        # Convert the dictionary to a JSON string
-        return json.dumps(merkle_tree_data)
-
-    @staticmethod
-    def deserialize(json_data, hash_type="sha3_256"):
-        """
-        Deserializes the JSON string into a MerkleTree object.
-        """
-        # Convert the JSON string back to a dictionary
-        merkle_tree_data = json.loads(json_data)
-
-        # Create a new MerkleTree object
-        m_tree = MerkleTree(hash_type)
-
-        # Convert the hex strings back to bytearrays and set the leaves and levels
-        m_tree.leaves = [bytearray.fromhex(leaf) for leaf in merkle_tree_data["leaves"]]
-        if merkle_tree_data["levels"] is not None:
-            m_tree.levels = []
-            for level in merkle_tree_data["levels"]:
-                m_tree.levels.append([bytearray.fromhex(item) for item in level])
-        m_tree.is_ready = merkle_tree_data["is_ready"]
-
-        return m_tree
-
-
-if False:
-    # Usage Example:
-    # Given a MerkleTree instance 'm_tree'
-    m_tree = MerkleTree()
-    m_tree.add_leaf(["leaf1", "leaf2"], do_hash=True)
-    m_tree.make_tree()
-
-    # Serialize the MerkleTree
-    serialized_tree = MerkleTreeSerializer.serialize(m_tree)
-
-    # Later on, deserialize back into a MerkleTree object
-    deserialized_tree = MerkleTreeSerializer.deserialize(serialized_tree)

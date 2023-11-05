@@ -374,7 +374,9 @@ def main(config):
     # Update miner storage for next challenge
     dd["randomness"][cyn.challenge_index] = new_randomness
     dd["commitments"][cyn.challenge_index] = hex_to_ecc_point(new_point, cyn.curve)
+    print("\nOG merkle_tree:", merkle_tree.serialize())
     dd["merkle_tree"] = new_merkle_tree
+    print("\nNEW merkle_tree:", dd["merkle_tree"].serialize())
 
     xx = encode_miner_storage(**dd)
     print("\nencoded updated data:", xx)
@@ -389,11 +391,15 @@ def main(config):
     df = decode_miner_storage(fetched, cyn.curve)
     print("\nupdated data:", dd)
     print("\nfetched data:", df)
-    dd["merkle_tree"] = merkle_tree  # replace with old for eq
+    # dd["merkle_tree"] = new_merkle_tree  # replace with old for eq
     print("eq:", df == dd)
 
     for k in df.keys():
-        print(k, "eq:", df[k] == dd[k])
+        if k == "merkle_tree":
+            print(k, "eq:", df[k].serialize() == dd[k].serialize())
+        else:
+            print(k, "eq:", df[k] == dd[k])
+
     import pdb
 
     pdb.set_trace()
