@@ -42,7 +42,6 @@ from storage.utils import (
     setup_CRS,
     chunk_data,
     MerkleTree,
-    MerkleTreeSerializer,
     ECCommitment,
     ecc_point_to_hex,
     hex_to_ecc_point,
@@ -347,13 +346,10 @@ def main(config):
         challenge_hash=syn.data_hash, challenge_index=0, curve="P-256", g=syn.g, h=syn.h
     )
     data = database.get(cyn.challenge_hash)
-    print("retrieved data:", data)
-
-    dd = decoded_data = decode_miner_storage(data, syn.curve)
-    print("decoded data:", dd)
+    decoded_data = decode_miner_storage(data, syn.curve)
 
     # Select data to return based on challenge index
-    merkle_tree = copy.deepcopy(dd["merkle_tree"])
+    merkle_tree = copy.deepcopy(decoded_data["merkle_tree"])
     cyn.commitment = ecc_point_to_hex(decoded_data["commitments"][cyn.challenge_index])
     cyn.random_value = decoded_data["randomness"][cyn.challenge_index]
     cyn.merkle_root = decoded_data["merkle_tree"].get_merkle_root()
@@ -370,35 +366,14 @@ def main(config):
     cyn.new_commitment = new_point
     cyn.new_merkle_root = new_merkle_tree.get_merkle_root()
 
-    # TODO: SOMETHING IS FUCKY HERE WITH MERKLE TREE, NOT EQ!
     # Update miner storage for next challenge
-    dd["randomness"][cyn.challenge_index] = new_randomness
-    dd["commitments"][cyn.challenge_index] = hex_to_ecc_point(new_point, cyn.curve)
-    print("\nOG merkle_tree:", merkle_tree.serialize())
-    dd["merkle_tree"] = new_merkle_tree
-    print("\nNEW merkle_tree:", dd["merkle_tree"].serialize())
-
-    xx = encode_miner_storage(**dd)
-    print("\nencoded updated data:", xx)
-    xz = json.loads(xx.decode("utf-8"))
-    comm = b64_decode(xz["commitments"])
-    print("\nCOMM:", comm)
-    cs = [hex_to_ecc_point(c, cyn.curve) for c in comm]
-    print("\nCS:", cs)
-    database.set(cyn.challenge_hash, encode_miner_storage(**dd))
-    fetched = database.get(cyn.challenge_hash)
-    print("\nfetched updated data:", fetched)
-    df = decode_miner_storage(fetched, cyn.curve)
-    print("\nupdated data:", dd)
-    print("\nfetched data:", df)
-    # dd["merkle_tree"] = new_merkle_tree  # replace with old for eq
-    print("eq:", df == dd)
-
-    for k in df.keys():
-        if k == "merkle_tree":
-            print(k, "eq:", df[k].serialize() == dd[k].serialize())
-        else:
-            print(k, "eq:", df[k] == dd[k])
+    decoded_data["randomness"][cyn.challenge_index] = new_randomness
+    decoded_data["commitments"][cyn.challenge_index] = hex_to_ecc_point(
+        new_point, cyn.curve
+    )
+    decoded_data["merkle_tree"] = new_merkle_tree
+    database.set(cyn.challenge_hash, encode_miner_storage(**decoded_data))
+    print("database updated!")
 
     import pdb
 
