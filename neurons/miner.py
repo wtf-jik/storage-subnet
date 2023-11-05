@@ -313,71 +313,84 @@ def main(config):
 
     def challenge(synapse: storage.protocol.Challenge) -> storage.protocol.Challenge:
         # Retrieve commitments from local storage
-        data = database.get(synapse.challenge_hash)  # Stored in bytestring format
-        # data = database.get(syn.data_hash)
-        print("retrieved data:", data)
-        if data == None:
-            bt.logging.error(
-                f"Commitments not found for data hash: {synapse.challenge_hash}"
-            )
-            return synapse
-        data = deserialize_dict_with_bytes(data)  # deserialize from storage format
-        print("decoded data:", data)
-        challenge_data = data[synapse.challenge_index]
-        assert challenge_data["index"] == synapse.challenge_index
-        data_chunk = challenge_data["data_chunk"]
-        merkle_proof = challenge_data["merkle_proof"]
-        randomness = challenge_data["randomness"]
-        commitment = challenge_data["point"]
+        data = database.get(synapse.challenge_hash)
+        decoded_data = decode_miner_storage(data, syn.curve)
 
-        # Recommit data and send back to validator (miner side)
-        # Generate new g, h params with same curve to recommit
-        committer = ECCommitment(synapse.g, synapse.h)
-        new_merkle_root, new_commitments = recommit_data(
-            committer, [synapse.challenge_index], MerkleTree(merkle_proof), data_chunk
+        # Select data to return based on challenge index
+        merkle_tree = copy.deepcopy(decoded_data["merkle_tree"])
+        synapse.commitment = ecc_point_to_hex(
+            decoded_data["commitments"][synapse.challenge_index]
         )
-        data[synapse.challenge_index]
+        synapse.random_value = decoded_data["randomness"][synapse.challenge_index]
+        synapse.merkle_root = decoded_data["merkle_tree"].get_merkle_root()
+        synapse.data_chunk = decoded_data["data_chunks"][synapse.challenge_index]
+        synapse.merkle_proof = decoded_data["merkle_tree"].get_proof(
+            synapse.challenge_index
+        )
+
+        # Recommit to pieces we just opened (because we send random secret value)
+        committer = ECCommitment(
+            hex_to_ecc_point(synapse.g, synapse.curve),
+            hex_to_ecc_point(synapse.h, synapse.curve),
+        )
+        new_randomness, new_point, new_merkle_tree = recommit_data(
+            committer,
+            synapse.challenge_index,
+            decoded_data["merkle_tree"],
+            synapse.data_chunk,
+        )
+        synapse.new_commitment = new_point
+        synapse.new_merkle_root = new_merkle_tree.get_merkle_root()
+
+        # Update miner storage for next challenge
+        decoded_data["randomness"][synapse.challenge_index] = new_randomness
+        decoded_data["commitments"][synapse.challenge_index] = hex_to_ecc_point(
+            new_point, synapse.curve
+        )
+        decoded_data["merkle_tree"] = new_merkle_tree
+        database.set(synapse.challenge_hash, encode_miner_storage(**decoded_data))
+        print("database updated!")
 
         return synapse
 
-    syn = GetSynapse(config)
-    response = store(syn)
-    cyn = protocol.Challenge(
-        challenge_hash=syn.data_hash, challenge_index=0, curve="P-256", g=syn.g, h=syn.h
-    )
-    data = database.get(cyn.challenge_hash)
-    decoded_data = decode_miner_storage(data, syn.curve)
+    # syn = GetSynapse(config)
+    # response = store(syn)
+    # cyn = protocol.Challenge(
+    #     challenge_hash=syn.data_hash, challenge_index=0, curve="P-256", g=syn.g, h=syn.h
+    # )
+    # data = database.get(cyn.challenge_hash)
+    # decoded_data = decode_miner_storage(data, syn.curve)
 
-    # Select data to return based on challenge index
-    merkle_tree = copy.deepcopy(decoded_data["merkle_tree"])
-    cyn.commitment = ecc_point_to_hex(decoded_data["commitments"][cyn.challenge_index])
-    cyn.random_value = decoded_data["randomness"][cyn.challenge_index]
-    cyn.merkle_root = decoded_data["merkle_tree"].get_merkle_root()
-    cyn.data_chunk = decoded_data["data_chunks"][cyn.challenge_index]
-    cyn.merkle_proof = decoded_data["merkle_tree"].get_proof(cyn.challenge_index)
+    # # Select data to return based on challenge index
+    # merkle_tree = copy.deepcopy(decoded_data["merkle_tree"])
+    # cyn.commitment = ecc_point_to_hex(decoded_data["commitments"][cyn.challenge_index])
+    # cyn.random_value = decoded_data["randomness"][cyn.challenge_index]
+    # cyn.merkle_root = decoded_data["merkle_tree"].get_merkle_root()
+    # cyn.data_chunk = decoded_data["data_chunks"][cyn.challenge_index]
+    # cyn.merkle_proof = decoded_data["merkle_tree"].get_proof(cyn.challenge_index)
 
-    # Recommit to pieces we just opened (because we send random secret value)
-    committer = ECCommitment(
-        hex_to_ecc_point(cyn.g, cyn.curve), hex_to_ecc_point(cyn.h, cyn.curve)
-    )
-    new_randomness, new_point, new_merkle_tree = recommit_data(
-        committer, cyn.challenge_index, decoded_data["merkle_tree"], cyn.data_chunk
-    )
-    cyn.new_commitment = new_point
-    cyn.new_merkle_root = new_merkle_tree.get_merkle_root()
+    # # Recommit to pieces we just opened (because we send random secret value)
+    # committer = ECCommitment(
+    #     hex_to_ecc_point(cyn.g, cyn.curve), hex_to_ecc_point(cyn.h, cyn.curve)
+    # )
+    # new_randomness, new_point, new_merkle_tree = recommit_data(
+    #     committer, cyn.challenge_index, decoded_data["merkle_tree"], cyn.data_chunk
+    # )
+    # cyn.new_commitment = new_point
+    # cyn.new_merkle_root = new_merkle_tree.get_merkle_root()
 
-    # Update miner storage for next challenge
-    decoded_data["randomness"][cyn.challenge_index] = new_randomness
-    decoded_data["commitments"][cyn.challenge_index] = hex_to_ecc_point(
-        new_point, cyn.curve
-    )
-    decoded_data["merkle_tree"] = new_merkle_tree
-    database.set(cyn.challenge_hash, encode_miner_storage(**decoded_data))
-    print("database updated!")
+    # # Update miner storage for next challenge
+    # decoded_data["randomness"][cyn.challenge_index] = new_randomness
+    # decoded_data["commitments"][cyn.challenge_index] = hex_to_ecc_point(
+    #     new_point, cyn.curve
+    # )
+    # decoded_data["merkle_tree"] = new_merkle_tree
+    # database.set(cyn.challenge_hash, encode_miner_storage(**decoded_data))
+    # print("database updated!")
 
-    import pdb
+    # import pdb
 
-    pdb.set_trace()
+    # pdb.set_trace()
     # Step 6: Build and link miner functions to the axon.
     # The axon handles request processing, allowing validators to send this process requests.
     axon = bt.axon(wallet=wallet, config=config)
