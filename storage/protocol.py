@@ -50,6 +50,9 @@ class Challenge(bt.Synapse):
     # Receives
     challenge_hash: str  # hash of the data to challenge
     challenge_index: int  # block indices to challenge
+    # TODO: Validator must store (g,h,curve) setup params for each (miner,data) pair
+    g: str  # base point   (hex string representation)
+    h: str  # random point (hex string representation)
     curve: str
     # Returns
     # - commitment (point represented as hex string)
@@ -57,25 +60,18 @@ class Challenge(bt.Synapse):
     # - random value (int)
     # - merkle proof (List[Dict[<left|right>, hex strings])
     # - merkle root (hex string)
+    # - new commitment (point represented as hex string)
+    # - new merkle root (hex string)
     commitment: typing.Optional[str] = None
     data_chunk: typing.Optional[bytes] = None
     random_value: typing.Optional[int] = None
-    merkle_proof: typing.Optional[typing.List[typing.Dict[str, str]]] = None
+    merkle_proof: typing.Optional[
+        typing.List[typing.Dict[str, str]]
+    ] = None  # or b64 typing.Optional[str]
     merkle_root: typing.Optional[str] = None
-    b64string: typing.Optional[
+    new_commitment: typing.Optional[
         str
-    ] = None  # Contains everything you need as a dict: {'commitment': commitment, 'data_chunk': data_chunk, 'random_value': random_value, 'merkle_proof': merkle_proof, 'merkle_root': merkle_root}
-
-    # responses: typing.Optional[
-    #     typing.List[
-    #         typing.Dict[
-    #             str,  # index, commitment, data_chunk, random_value, merkle_proof
-    #             typing.Union[
-    #                 int,  # index, random_value
-    #                 str,  # hex point representation
-    #                 bytes,  # data chunk
-    #                 typing.List[typing.Tuple[str, str]],  # merkle proof
-    #             ],
-    #         ]
-    #     ]
-    # ] = None
+    ] = None  # must return recommitment for next challenge
+    new_merkle_root: typing.Optional[
+        str
+    ] = None  # must return new merkle root for next challenge

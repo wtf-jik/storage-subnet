@@ -5,11 +5,12 @@ import binascii
 from collections import defaultdict
 from typing import Dict, List, Any
 
+import Crypto
 from Crypto.Random import random
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 
-from .ecc import hex_to_ecc_point
+from .ecc import hex_to_ecc_point, ecc_point_to_hex
 from .merkle import MerkleTree
 
 
@@ -170,6 +171,27 @@ def b64_decode(data, decode_hex=False):
         except:
             pass
     return decoded_data
+
+
+def encode_miner_storage(**kwargs):
+    randomness = kwargs.get("randomness")
+    chunks = kwargs.get("data_chunks")
+    points = kwargs.get("commitments")
+    points = [
+        ecc_point_to_hex(p)
+        for p in points
+        if isinstance(p, Crypto.PublicKey.ECC.EccPoint)
+    ]
+    merkle_tree = kwargs.get("merkle_tree")
+
+    # store (randomness values, merkle tree, commitments, data chunks)
+    miner_store = {
+        "randomness": b64_encode(randomness),
+        "data_chunks": b64_encode(chunks),
+        "commitments": b64_encode(points),
+        "merkle_tree": b64_encode(merkle_tree.serialize()),
+    }
+    return json.dumps(miner_store).encode()
 
 
 def decode_miner_storage(encoded_storage, curve):

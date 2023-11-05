@@ -48,6 +48,7 @@ from storage.utils import (
     hex_to_ecc_point,
     b64_encode,
     b64_decode,
+    encode_miner_storage,
     decode_miner_storage,
     serialize_dict_with_bytes,
     deserialize_dict_with_bytes,
@@ -132,29 +133,19 @@ def commit_data(committer, data_chunks, n_chunks):
     return randomness, chunks, points, merkle_tree
 
 
-# Recommit data and send back to validator (miner side)
-def recommit_data(committer, challenge_indices, merkle_tree, data):
-    # TODO: Store the g,h values in the database so we can retrieve them later
-    # new_commitments = {}
-    new_commitments = []
-    for i in challenge_indices:
-        c, m_val, r = committer.commit(data[i])
-        commitment_hash = hash_data(
-            ecc_point_to_hex(c)
-        )  # Assuming a hash_function is available.
-        new_commitments.append(
-            {
-                "index": i,
-                "hash": m_val,  # commitment_hash,
-                "data_chunk": data[i],
-                "point": c,
-                "randomness": r,
-                "merkle_proof": None,
-            }
-        )
-        merkle_tree.update_leaf(i, ecc_point_to_hex(c))
-    new_merkle_root = merkle_tree.get_merkle_root()
-    return new_merkle_root, new_commitments
+def recommit_data(committer, challenge_index, merkle_tree, data_chunk):
+    # Commit each chunk of data
+    new_merkle_tree = copy.deepcopy(merkle_tree)
+    c, m_val, r = committer.commit(data_chunk)
+    randomness = r
+    point = c_hex = ecc_point_to_hex(c)
+    new_merkle_tree.update_leaf(challenge_index, c_hex)
+    # merkle_tree.make_tree() # TODO: check if we need this step
+    return (
+        randomness,
+        point,
+        new_merkle_tree,
+    )
 
 
 def GetSynapse(config):
@@ -353,21 +344,56 @@ def main(config):
     syn = GetSynapse(config)
     response = store(syn)
     cyn = protocol.Challenge(
-        challenge_hash=syn.data_hash, challenge_index=0, curve="P-256"
+        challenge_hash=syn.data_hash, challenge_index=0, curve="P-256", g=syn.g, h=syn.h
     )
     data = database.get(cyn.challenge_hash)
     print("retrieved data:", data)
 
     dd = decoded_data = decode_miner_storage(data, syn.curve)
-    ddata = json.loads(data.decode("utf-8"))
-    print("decoded data:", ddata)
+    print("decoded data:", dd)
 
-    cyn.commitment = ecc_point_to_hex(dd["commitments"][cyn.challenge_index])
-    cyn.random_value = dd["randomness"][cyn.challenge_index]
-    cyn.merkle_root = dd["merkle_tree"].get_merkle_root()
-    cyn.data_chunk = dd["data_chunks"][cyn.challenge_index]
-    cyn.merkle_proof = dd["merkle_tree"].get_proof(cyn.challenge_index)
+    # Select data to return based on challenge index
+    merkle_tree = copy.deepcopy(dd["merkle_tree"])
+    cyn.commitment = ecc_point_to_hex(decoded_data["commitments"][cyn.challenge_index])
+    cyn.random_value = decoded_data["randomness"][cyn.challenge_index]
+    cyn.merkle_root = decoded_data["merkle_tree"].get_merkle_root()
+    cyn.data_chunk = decoded_data["data_chunks"][cyn.challenge_index]
+    cyn.merkle_proof = decoded_data["merkle_tree"].get_proof(cyn.challenge_index)
 
+    # Recommit to pieces we just opened (because we send random secret value)
+    committer = ECCommitment(
+        hex_to_ecc_point(cyn.g, cyn.curve), hex_to_ecc_point(cyn.h, cyn.curve)
+    )
+    new_randomness, new_point, new_merkle_tree = recommit_data(
+        committer, cyn.challenge_index, decoded_data["merkle_tree"], cyn.data_chunk
+    )
+    cyn.new_commitment = new_point
+    cyn.new_merkle_root = new_merkle_tree.get_merkle_root()
+
+    # TODO: SOMETHING IS FUCKY HERE WITH MERKLE TREE, NOT EQ!
+    # Update miner storage for next challenge
+    dd["randomness"][cyn.challenge_index] = new_randomness
+    dd["commitments"][cyn.challenge_index] = hex_to_ecc_point(new_point, cyn.curve)
+    dd["merkle_tree"] = new_merkle_tree
+
+    xx = encode_miner_storage(**dd)
+    print("\nencoded updated data:", xx)
+    xz = json.loads(xx.decode("utf-8"))
+    comm = b64_decode(xz["commitments"])
+    print("\nCOMM:", comm)
+    cs = [hex_to_ecc_point(c, cyn.curve) for c in comm]
+    print("\nCS:", cs)
+    database.set(cyn.challenge_hash, encode_miner_storage(**dd))
+    fetched = database.get(cyn.challenge_hash)
+    print("\nfetched updated data:", fetched)
+    df = decode_miner_storage(fetched, cyn.curve)
+    print("\nupdated data:", dd)
+    print("\nfetched data:", df)
+    dd["merkle_tree"] = merkle_tree  # replace with old for eq
+    print("eq:", df == dd)
+
+    for k in df.keys():
+        print(k, "eq:", df[k] == dd[k])
     import pdb
 
     pdb.set_trace()
