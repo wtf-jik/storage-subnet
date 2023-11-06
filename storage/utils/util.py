@@ -1,17 +1,36 @@
 import os
 import json
 import base64
+import hashlib
 import binascii
 from collections import defaultdict
 from typing import Dict, List, Any
 
+import Crypto
 from Crypto.Random import random
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 
+from .ecc import hex_to_ecc_point, ecc_point_to_hex, hash_data, ECCommitment
+from .merkle import MerkleTree
+
 
 def make_random_file(name=None, maxsize=1024):
-    size = random.randint(32, maxsize)
+    """
+    Creates a file with random binary data or returns a bytes object with random data if no name is provided.
+
+    Args:
+        name (str, optional): The name of the file to create. If None, the function returns the random data instead.
+        maxsize (int): The maximum size of the file or bytes object to be created, in bytes. Defaults to 1024.
+
+    Returns:
+        bytes: If 'name' is not provided, returns a bytes object containing random data.
+        None: If 'name' is provided, a file is created and nothing is returned.
+
+    Raises:
+        OSError: If the function encounters an error while writing to the file.
+    """
+    size = random.randint(128, maxsize)
     data = os.urandom(size)
     if isinstance(name, str):
         with open(name, "wb") as fout:
@@ -22,12 +41,56 @@ def make_random_file(name=None, maxsize=1024):
 
 # Determine a random chunksize between 2kb-128kb (random sample from this range) store as chunksize_E
 def get_random_chunksize(maxsize=128):
+    """
+    Determines a random chunk size within a specified range for data chunking.
+
+    Args:
+        maxsize (int): The maximum size limit for the random chunk size. Defaults to 128.
+
+    Returns:
+        int: A random chunk size between 2kb and 'maxsize' kilobytes.
+
+    Raises:
+        ValueError: If maxsize is set to a value less than 2.
+    """
     return random.randint(2, maxsize)
 
 
 def chunk_data(data, chunksize: int):
+    """
+    Generator function that chunks the given data into pieces of a specified size.
+
+    Args:
+        data (bytes): The binary data to be chunked.
+        chunksize (int): The size of each chunk in bytes.
+
+    Yields:
+        bytes: A chunk of the data with the size equal to 'chunksize' or the remaining size of data.
+
+    Raises:
+        ValueError: If 'chunksize' is less than or equal to 0.
+    """
     for i in range(0, len(data), chunksize):
         yield data[i : i + chunksize]
+
+
+def is_hex_str(s):
+    """
+    Check if the input string is a valid hexadecimal string.
+
+    :param s: The string to check
+    :return: True if s is a valid hexadecimal string, False otherwise
+    """
+    # A valid hex string must have an even number of characters
+    if len(s) % 2 != 0:
+        return False
+
+    # Check if each character is a valid hex character
+    try:
+        int(s, 16)
+        return True
+    except ValueError:
+        return False
 
 
 def encrypt_data(filename, key):
@@ -60,64 +123,21 @@ def encrypt_data(filename, key):
     return cipher_text, cipher.nonce, tag
 
 
-def serialize_dict_with_bytes(commitments: Dict[int, Dict[str, Any]]) -> str:
-    # Convert our custom objects to serializable objects
-    for commitment in commitments:
-        # Check if 'point' is a bytes-like object, if not, it's already a string (hex)
-        if isinstance(commitment.get("point"), bytes):
-            commitment["point"] = commitment["point"].hex()
-
-        if commitment.get("data_chunk"):
-            commitment["data_chunk"] = commitment["data_chunk"].hex()
-
-        # Similarly, check for 'merkle_proof' and convert if necessary
-        if commitment.get("merkle_proof"):
-            serialized_merkle_proof = []
-            for proof in commitment["merkle_proof"]:
-                serialized_proof = {}
-                for side, value in proof.items():
-                    # Check if value is a bytes-like object, if not, it's already a string (hex)
-                    if isinstance(value, bytes):
-                        serialized_proof[side] = value.hex()
-                    else:
-                        serialized_proof[side] = value
-                serialized_merkle_proof.append(serialized_proof)
-            commitment["merkle_proof"] = serialized_merkle_proof
-
-        # Randomness is an integer and should be safely converted to string without checking type
-        if commitment.get("randomness"):
-            commitment["randomness"] = str(commitment["randomness"])
-
-    # Convert the entire structure to JSON
-    return json.dumps(commitments)
-
-
-# Deserializer function
-def deserialize_dict_with_bytes(serialized: str) -> Dict[int, Dict[str, Any]]:
-    def hex_to_bytes(hex_str: str) -> bytes:
-        return bytes.fromhex(hex_str)
-
-    def deserialize_helper(d: Dict[str, Any]) -> Dict[str, Any]:
-        for key, value in d.items():
-            if key == "data_chunk":
-                d[key] = hex_to_bytes(value)
-            elif key == "randomness":
-                d[key] = int(value)
-            elif key == "merkle_proof" and value is not None:
-                d[key] = [{k: v for k, v in item.items()} for item in value]
-        return d
-
-    # Parse the JSON string back to a dictionary
-    return json.loads(serialized, object_hook=deserialize_helper)
-
-
-def decode_commitments(encoded_commitments):
-    decoded_commitments = base64.b64decode(encoded_commitments)
-    commitments = deserialize_dict_with_bytes(decoded_commitments)
-    return commitments
-
-
 def decode_storage(encoded_storage):
+    """
+    Decodes a base64-encoded string that represents storage data. This storage data is expected
+    to contain 'commitments' and 'params', where 'commitments' will be further decoded using
+    a separate function, and 'params' are base64-decoded and then JSON-decoded.
+
+    Args:
+        encoded_storage (str): A base64-encoded string representing storage data.
+
+    Returns:
+        dict: A dictionary with the decoded storage data, including 'commitments' and 'params'.
+
+    Raises:
+        ValueError: If encoded_storage is not a valid base64-encoded string or the JSON decoding fails.
+    """
     decoded_storage = base64.b64decode(encoded_storage).decode("utf-8")
     dict_storage = json.loads(decoded_storage)
     dict_storage["commitments"] = decode_commitments(dict_storage["commitments"])
@@ -127,39 +147,185 @@ def decode_storage(encoded_storage):
     return dict_storage
 
 
-def GetSynapse(config):
-    # Setup CRS for this round of validation
-    g, h = setup_CRS(curve=config.curve)
+def b64_encode(data):
+    """
+    Encodes the given data into a base64 string. If the data is a list or dictionary of bytes, it converts
+    the bytes into hexadecimal strings before encoding.
 
-    # Make a random bytes file to test the miner
-    random_data = make_random_file(maxsize=config.maxsize)
+    Args:
+        data (list or dict): The data to be base64 encoded. Can be a list of bytes or a dictionary with bytes values.
 
-    # Random encryption key for now (never will decrypt)
-    key = get_random_bytes(32)  # 256-bit key
+    Returns:
+        str: The base64 encoded string of the input data.
 
-    # Encrypt the data
-    encrypted_data, nonce, tag = encrypt_data(
-        random_data,
-        key,  # TODO: Use validator key as the encryption key?
+    Raises:
+        TypeError: If the input is not a list, dict, or bytes.
+    """
+    if isinstance(data, list) and isinstance(data[0], bytes):
+        data = [d.hex() for d in data]
+    if isinstance(data, dict) and isinstance(data[list(data.keys())[0]], bytes):
+        data = {k: v.hex() for k, v in data.items()}
+    return base64.b64encode(json.dumps(data).encode()).decode("utf-8")
+
+
+def b64_decode(data, decode_hex=False):
+    """
+    Decodes a base64 string into a list or dictionary. If decode_hex is True, it converts any hexadecimal strings
+    within the data back into bytes.
+
+    Args:
+        data (bytes or str): The base64 encoded data to be decoded.
+        decode_hex (bool): A flag to indicate whether to decode hex strings into bytes. Defaults to False.
+
+    Returns:
+        list or dict: The decoded data. Returns a list if the original encoded data was a list, and a dict if it was a dict.
+
+    Raises:
+        ValueError: If the input is not properly base64 encoded or if hex decoding fails.
+    """
+    data = data.decode("utf-8") if isinstance(data, bytes) else data
+    decoded_data = json.loads(base64.b64decode(data).decode("utf-8"))
+    if decode_hex:
+        try:
+            decoded_data = (
+                [bytes.fromhex(d) for d in decoded_data]
+                if isinstance(decoded_data, list)
+                else {k: bytes.fromhex(v) for k, v in decoded_data.items()}
+            )
+        except:
+            pass
+    return decoded_data
+
+
+def encode_miner_storage(**kwargs):
+    """
+    Encodes miner storage data, including randomness, data chunks, commitments, and the Merkle tree into a
+    base64-encoded JSON byte string.
+
+    Args:
+        **kwargs: Keyword arguments containing 'randomness', 'data_chunks', 'commitments', and 'merkle_tree'.
+
+    Returns:
+        bytes: The encoded byte string containing all the miner storage data.
+
+    Note:
+        This function expects the 'commitments' keyword argument to be a list of EccPoint objects, which will be
+        converted to hex strings before encoding.
+    """
+    randomness = kwargs.get("randomness")
+    chunks = kwargs.get("data_chunks")
+    points = kwargs.get("commitments")
+    points = [
+        ecc_point_to_hex(p)
+        for p in points
+        if isinstance(p, Crypto.PublicKey.ECC.EccPoint)
+    ]
+    merkle_tree = kwargs.get("merkle_tree")
+
+    # store (randomness values, merkle tree, commitments, data chunks)
+    miner_store = {
+        "randomness": b64_encode(randomness),
+        "data_chunks": b64_encode(chunks),
+        "commitments": b64_encode(points),
+        "merkle_tree": b64_encode(merkle_tree.serialize()),
+    }
+    return json.dumps(miner_store).encode()
+
+
+def decode_miner_storage(encoded_storage, curve):
+    """
+    Decodes miner storage data from a base64-encoded JSON byte string into its components.
+
+    Args:
+        encoded_storage (bytes): The encoded byte string of the miner storage data.
+        curve (Crypto.PublicKey.ECC.Curve): The elliptic curve used for ECC points.
+
+    Returns:
+        dict: A dictionary containing the decoded 'randomness', 'data_chunks', 'commitments', and 'merkle_tree'.
+
+    Note:
+        This function converts 'commitments' back from hex strings to EccPoint objects and deserializes the
+        'merkle_tree'.
+    """
+    xy = json.loads(encoded_storage.decode("utf-8"))
+    xz = {
+        k: b64_decode(v, decode_hex=True if k != "commitments" else False)
+        for k, v in xy.items()
+    }
+    xz["commitments"] = [hex_to_ecc_point(c, curve) for c in xz["commitments"]]
+    xz["merkle_tree"] = MerkleTree().deserialize(xz["merkle_tree"])
+    return xz
+
+
+def validate_merkle_proof(proof, target_hash, merkle_root):
+    """
+    Validates a Merkle proof by computing the hash path from the target hash to the expected Merkle root.
+
+    Args:
+        proof (list of dicts): The Merkle proof, each entry containing a 'left' or 'right' sibling hash.
+        target_hash (str): The hex string of the hash of the target data.
+        merkle_root (str): The hex string of the expected Merkle root.
+
+    Returns:
+        bool: True if the proof is valid and the computed hash path matches the Merkle root, False otherwise.
+
+    Raises:
+        ValueError: If proof elements do not contain a 'left' or 'right' key.
+    """
+    merkle_root = bytearray.fromhex(merkle_root)
+    target_hash = bytearray.fromhex(target_hash)
+    if len(proof) == 0:
+        return target_hash == merkle_root
+    else:
+        proof_hash = target_hash
+        for p in proof:
+            try:
+                # the sibling is a left node
+                sibling = bytearray.fromhex(p["left"])
+                proof_hash = hashlib.sha3_256(sibling + proof_hash).digest()
+            except:
+                # the sibling is a right node
+                sibling = bytearray.fromhex(p["right"])
+                proof_hash = hashlib.sha3_256(proof_hash + sibling).digest()
+        return proof_hash == merkle_root
+
+
+def verify_challenge(synapse):
+    """
+    Verifies the validity of a challenge response by opening the commitment and validating the Merkle proof.
+
+    Args:
+        synapse: An object containing challenge data, including the commitment, the data chunk, the random value used
+                 in the commitment, the elliptic curve, and the Merkle proof.
+
+    Returns:
+        bool: True if both the commitment opens correctly and the Merkle proof is valid, False otherwise.
+
+    Raises:
+        Any exceptions raised by the underlying cryptographic functions are propagated.
+
+    Note:
+        The TODO in the function indicates that additional type checks and defensive programming practices should be
+        implemented to handle various input types for robustness.
+    """
+    # TODO: Add checks and defensive programming here to handle all types
+    # (bytes, str, hex, ecc point, etc)
+    committer = ECCommitment(
+        hex_to_ecc_point(synapse.g, synapse.curve),
+        hex_to_ecc_point(synapse.h, synapse.curve),
     )
+    commitment = hex_to_ecc_point(synapse.commitment, synapse.curve)
 
-    # Convert to base64 for compactness
-    b64_encrypted_data = base64.b64encode(encrypted_data).decode("utf-8")
+    if not committer.open(
+        commitment, hash_data(synapse.data_chunk), synapse.random_value
+    ):
+        print(f"Opening commitment failed")
+        return False
 
-    # Hash the encrypted data
-    data_hash = hash_data(encrypted_data)
+    if not validate_merkle_proof(
+        synapse.merkle_proof, ecc_point_to_hex(commitment), synapse.merkle_root
+    ):
+        print(f"Merkle proof validation failed")
+        return False
 
-    # Chunk the data
-    chunk_size = get_random_chunksize()
-    # chunks = list(chunk_data(encrypted_data, chunksize))
-
-    syn = synapse = protocol.Store(
-        chunk_size=chunk_size,
-        encrypted_data=b64_encrypted_data,
-        data_hash=data_hash,
-        curve=config.curve,
-        g=ecc_point_to_hex(g),
-        h=ecc_point_to_hex(h),
-        size=sys.getsizeof(encrypted_data),
-    )
-    return synapse
+    return True

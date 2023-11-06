@@ -22,6 +22,7 @@
 import os
 import sys
 import copy
+import json
 import time
 import redis
 import typing
@@ -38,13 +39,17 @@ from pprint import pprint, pformat
 import storage
 from storage.utils import (
     hash_data,
+    setup_CRS,
     chunk_data,
     MerkleTree,
     ECCommitment,
     ecc_point_to_hex,
     hex_to_ecc_point,
-    serialize_dict_with_bytes,
-    deserialize_dict_with_bytes,
+    b64_encode,
+    b64_decode,
+    encode_miner_storage,
+    decode_miner_storage,
+    verify_challenge,
 )
 
 
@@ -100,79 +105,82 @@ def get_config():
     return config
 
 
-def commit_data(committer, data_chunks):
+def commit_data(committer, data_chunks, n_chunks):
+    """
+    Commits a list of data chunks to a new Merkle tree and generates the associated randomness and ECC points.
+
+    This function takes a 'committer' object which should have a 'commit' method, a list of 'data_chunks', and
+    an integer 'n_chunks' specifying the number of chunks to commit. It commits each chunk of data to the Merkle tree,
+    collecting the ECC points and randomness values for each commitment, and then constructs the Merkle tree from
+    all committed chunks.
+
+    Args:
+        committer: An object that has a 'commit' method for committing data chunks.
+        data_chunks (list): A list of data chunks to be committed.
+        n_chunks (int): The number of data chunks expected to be committed.
+
+    Returns:
+        tuple: A tuple containing four elements:
+            - randomness (list): A list of randomness values for each committed chunk.
+            - chunks (list): The original list of data chunks that were committed.
+            - points (list): A list of hex strings representing the ECC points for each commitment.
+            - merkle_tree (MerkleTree): A Merkle tree object that contains the commitments as leaves.
+
+    Raises:
+        ValueError: If the length of data_chunks is not equal to n_chunks.
+    """
     merkle_tree = MerkleTree()
-    commitments = []
 
     # Commit each chunk of data
+    randomness, chunks, points = [None] * n_chunks, [None] * n_chunks, [None] * n_chunks
     for index, chunk in enumerate(data_chunks):
         c, m_val, r = committer.commit(chunk)
         c_hex = ecc_point_to_hex(c)
-        commitments.append(
-            {
-                "index": index,
-                "hash": m_val,
-                "data_chunk": chunk,
-                "point": c_hex,
-                "randomness": r,
-                "merkle_proof": None,
-            }
-        )
+        randomness[index] = r
+        chunks[index] = chunk
+        points[index] = c_hex
         merkle_tree.add_leaf(c_hex)
 
     # Create the tree from the leaves
     merkle_tree.make_tree()
-
-    # Get the merkle proof for each commitment
-    for commitment in commitments:
-        merkle_proof = merkle_tree.get_proof(commitment["index"])
-        commitment["merkle_proof"] = merkle_proof
-
-    return commitments, merkle_tree.get_merkle_root()
+    return randomness, chunks, points, merkle_tree
 
 
-# Recommit data and send back to validator (miner side)
-def recommit_data(committer, challenge_indices, merkle_tree, data):
-    # TODO: Store the g,h values in the database so we can retrieve them later
-    # new_commitments = {}
-    new_commitments = []
-    for i in challenge_indices:
-        c, m_val, r = committer.commit(data[i])
-        commitment_hash = hash_data(
-            ecc_point_to_hex(c)
-        )  # Assuming a hash_function is available.
-        new_commitments.append(
-            {
-                "index": i,
-                "hash": m_val,  # commitment_hash,
-                "data_chunk": data[i],
-                "point": c,
-                "randomness": r,
-                "merkle_proof": None,
-            }
-        )
-        merkle_tree.update_leaf(i, ecc_point_to_hex(c))
-    new_merkle_root = merkle_tree.get_merkle_root()
-    return new_merkle_root, new_commitments
+def recommit_data(committer, challenge_index, merkle_tree, data_chunk):
+    """
+    Recommit a single data chunk at the specified index in the Merkle tree and update the tree.
 
+    This function recomputes the commitment for a single data chunk at the given challenge_index within the provided
+    Merkle tree. It is intended to be used when a specific chunk in the Merkle tree needs to be updated. The function
+    returns the new randomness, the updated ECC point as a hex string, and the new Merkle tree with the updated commitment.
 
-# TEMP
-# import this repo
-from storage import protocol
-from storage.utils import (
-    hash_data,
-    setup_CRS,
-    chunk_data,
-    MerkleTree,
-    encrypt_data,
-    ECCommitment,
-    make_random_file,
-    get_random_chunksize,
-    ecc_point_to_hex,
-    hex_to_ecc_point,
-    serialize_dict_with_bytes,
-    deserialize_dict_with_bytes,
-)
+    Args:
+        committer: An object that has a 'commit' method for committing data chunks.
+        challenge_index (int): The index of the data chunk in the Merkle tree that needs to be re-committed.
+        merkle_tree (MerkleTree): The Merkle tree that contains the current commitments.
+        data_chunk: The new data chunk that will replace the existing commitment at challenge_index.
+
+    Returns:
+        tuple: A tuple containing three elements:
+            - randomness: The randomness value associated with the new commitment.
+            - point (str): A hex string representing the new ECC point for the commitment.
+            - new_merkle_tree (MerkleTree): The updated Merkle tree object.
+
+    Raises:
+        IndexError: If challenge_index is not a valid index for the Merkle tree leaves.
+    """
+    # Commit each chunk of data
+    new_merkle_tree = copy.deepcopy(merkle_tree)
+    c, m_val, r = committer.commit(data_chunk)
+    randomness = r
+    point = c_hex = ecc_point_to_hex(c)
+    new_merkle_tree.update_leaf(challenge_index, c_hex)
+    # merkle_tree.make_tree() # TODO: check if we need this step
+    return (
+        randomness,
+        point,
+        new_merkle_tree,
+    )
 
 
 # Main takes the config and starts the miner.
@@ -266,6 +274,24 @@ def main(config):
 
     # This is the core miner function, which decides the miner's response to a valid, high-priority request.
     def store(synapse: storage.protocol.Store) -> storage.protocol.Store:
+        """
+        Stores encrypted data chunks along with their commitments and the associated Merkle tree in the database.
+
+        This function decodes the encrypted data provided in the synapse object, chunks it, and creates cryptographic
+        commitments for each chunk using elliptic curve cryptography. The commitments and randomness values are stored
+        along with a serialized Merkle tree. Finally, it verifies that the storage can be correctly retrieved and decoded,
+        preparing the synapse object with necessary return values for the validator.
+
+        Args:
+            synapse (storage.protocol.Store): An object containing storage request parameters, including encrypted data,
+                                            chunk size, curve information, and data hash for storage indexing.
+
+        Returns:
+            storage.protocol.Store: The updated synapse object containing commitments and the Merkle root of the stored data.
+
+        Raises:
+            Any exception raised by the underlying storage, encoding, or cryptographic functions will be propagated.
+        """
         # Chunk the data according to the specified (random) chunk size
         encrypted_data_bytes = base64.b64decode(synapse.encrypted_data)
         data_chunks = chunk_data(encrypted_data_bytes, synapse.chunk_size)
@@ -276,45 +302,121 @@ def main(config):
 
         # Commit the data chunks based on the provided curve points
         committer = ECCommitment(g, h)
-        commitments, merkle_root = commit_data(committer, data_chunks)
+        # commitments, merkle_tree = commit_data(committer, data_chunks)
+        randomness, chunks, points, merkle_tree = commit_data(
+            committer, data_chunks, synapse.n_chunks
+        )
 
-        # Store commitments in local storage indexed by the data hash
-        serialized_commitments = serialize_dict_with_bytes(copy.deepcopy(commitments))
-        database.set(synapse.data_hash, serialized_commitments)
+        # store (randomness values, merkle tree, commitments, data chunks)
+        miner_store = {
+            "randomness": b64_encode(randomness),
+            "data_chunks": b64_encode(chunks),
+            "commitments": b64_encode(points),
+            "merkle_tree": b64_encode(merkle_tree.serialize()),
+        }
+        dumped = json.dumps(miner_store).encode()
+        database.set(synapse.data_hash, dumped)
 
-        # Do not send randomness values to the validator until challenged
-        for commitment in commitments:
-            del commitment[
-                "randomness"
-            ]  # don't send back random value until challenged
-            del commitment[
-                "merkle_proof"
-            ]  # don't send back merkle proof until challenged
+        # Verify retrieval and decoding
+        encoded_storage = database.get(synapse.data_hash)
+        decoded_storage = decode_miner_storage(encoded_storage, synapse.curve)
 
-        # Encode base64 so we can send less data over the wire
-        serialized_commitments_return = base64.b64encode(
-            serialize_dict_with_bytes(commitments).encode()
-        ).decode("utf-8")
-
-        # Return the commitments and merkle root
-        synapse.commitments = serialized_commitments_return
-        synapse.merkle_root = merkle_root
-
+        # Prepare return values to validator
+        synapse.commitments = miner_store["commitments"]
+        synapse.merkle_root = merkle_tree.get_merkle_root()
         return synapse
 
     def challenge(synapse: storage.protocol.Challenge) -> storage.protocol.Challenge:
-        # Retrieve commitments from local storage
-        commitments = database.get(synapse.data_hash)
-        if commitments is None:
-            bt.logging.error(
-                f"Commitments not found for data hash: {synapse.data_hash}"
-            )
-            return synapse
+        """
+        Responds to a challenge by providing a specific data chunk, its randomness, and a Merkle proof from the storage.
 
-        # Recommit data and send back to validator (miner side)
-        committer = ECCommitment(synapse.g, synapse.h)
+        When challenged, this function retrieves the stored commitments, selects the specified data chunk and its
+        corresponding randomness value and Merkle proof based on the challenge index. It also re-commits to the data chunk,
+        updates the miner storage with the new commitment and Merkle tree, and returns the challenge object with the
+        necessary data for verification.
+
+        Args:
+            synapse (storage.protocol.Challenge): An object containing challenge parameters, including the challenge index,
+                                                curve information, and the challenge hash for retrieving the stored data.
+
+        Returns:
+            storage.protocol.Challenge: The updated synapse object containing the requested chunk, its randomness value,
+                                        the corresponding Merkle proof, and the updated commitment and Merkle root.
+
+        Raises:
+            Any exception raised by the underlying storage, encoding, or cryptographic functions will be propagated.
+
+        Notes:
+            The database update operation is a critical section of the code that ensures the miner's storage is up-to-date
+            with the latest commitments, in case of concurrent challenge requests.
+        """
+        # Retrieve commitments from local storage
+        data = database.get(synapse.challenge_hash)
+        decoded_data = decode_miner_storage(data, syn.curve)
+
+        # Select data to return based on challenge index
+        merkle_tree = copy.deepcopy(decoded_data["merkle_tree"])
+        synapse.commitment = ecc_point_to_hex(
+            decoded_data["commitments"][synapse.challenge_index]
+        )
+        synapse.random_value = decoded_data["randomness"][synapse.challenge_index]
+        synapse.merkle_root = decoded_data["merkle_tree"].get_merkle_root()
+        synapse.data_chunk = decoded_data["data_chunks"][synapse.challenge_index]
+        synapse.merkle_proof = decoded_data["merkle_tree"].get_proof(
+            synapse.challenge_index
+        )
+
+        # Recommit to pieces we just opened (because we send random secret value)
+        committer = ECCommitment(
+            hex_to_ecc_point(synapse.g, synapse.curve),
+            hex_to_ecc_point(synapse.h, synapse.curve),
+        )
+        new_randomness, new_point, new_merkle_tree = recommit_data(
+            committer,
+            synapse.challenge_index,
+            decoded_data["merkle_tree"],
+            synapse.data_chunk,
+        )
+        synapse.new_commitment = new_point
+        synapse.new_merkle_root = new_merkle_tree.get_merkle_root()
+
+        # Update miner storage for next challenge
+        decoded_data["randomness"][synapse.challenge_index] = new_randomness
+        decoded_data["commitments"][synapse.challenge_index] = hex_to_ecc_point(
+            new_point, synapse.curve
+        )
+        decoded_data["merkle_tree"] = new_merkle_tree
+        database.set(synapse.challenge_hash, encode_miner_storage(**decoded_data))
+        print("database updated!")
 
         return synapse
+
+    if False:  # (debugging)
+        syn = GetSynapse(config)
+        response = store(syn)
+
+        cyn = storage.protocol.Challenge(
+            challenge_hash=syn.data_hash,
+            challenge_index=0,
+            curve="P-256",
+            g=syn.g,
+            h=syn.h,
+        )
+        response = challenge(cyn)
+
+        verified = verify_challenge(response)
+
+        print(f"Is verified: {verified}")
+
+        import pdb
+
+        pdb.set_trace()
+
+    # TODO: Validator code to update storage after challenge is successful
+    # TODO: Encoding and decoding of merkle proofs on challenege
+    # TODO: Defensive programming and error-handling around all functions
+    # TODO: Test over the wire if you can query these endpoints and get the right responses
+    # TODO: GUNdb mechanism on validator side for shared database (or first approx/sqlite?)
 
     # Step 6: Build and link miner functions to the axon.
     # The axon handles request processing, allowing validators to send this process requests.

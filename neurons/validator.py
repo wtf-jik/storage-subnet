@@ -28,7 +28,7 @@ import base64
 import argparse
 import traceback
 import bittensor as bt
-from random import choice
+from random import random_choice
 from Crypto.Random import get_random_bytes
 
 # import this repo
@@ -52,16 +52,69 @@ from storage.utils import (
 
 # TODO:
 def Challenge(database):
+    database = redis.StrictRedis(host="localhost", port=6379, db=0)
     keys = database.keys("*")
-    key_ = choice(keys)
-    data = database.get(key_)
-    data = decode_storage(data)
-    commitments = data["commitments"]
-    merkle_root = data["merkle_root"]
-    params = data["params"]
-    index = choice(range(len(commitments)))
-    commitment = commitments[index]
+    store_keys = [
+        "abc.123",
+        "def.123",
+        "def.456",
+        "hig.456",
+        "lmn.456",
+    ]
 
+    key_by_miner = {}
+    for key in keys:
+        data_hash, hotkey = key.split(".")
+        if hotkey not in key_by_miner:
+            key_by_miner[hotkey] = []
+        key_by_miner[hotkey].append(data_hash)
+
+    # subtensor = bt.subtensor(network="test")
+    # metagraph = subtensor.metagraph(8)
+    # hotkeys = metagraph.hotkeys
+    hotkeys = [
+        None,
+    ]  # "123", "456"]
+    for hotkey in hotkeys:
+        # Randomly select a storage_key from the database for this miner
+        keys = key_by_miner[hotkey]
+        hash = "103804754514487657733834309377505898919271919633571683238396104733193613812627"  # random_choice(keys)
+        data = database.get(f"{hash}.{hotkey}")
+
+        # Decode the storage data and create a challenge
+        data = decode_storage(data)
+        params = data["params"]
+        merkle_root = data["merkle_root"]
+        commitments = data["commitments"]
+
+        # Choose a random commitment to challenge
+        index = random_choice(range(len(commitments)))
+        commitment = commitments[index]
+
+        # Create the challenge
+        synapse = protocol.Challenge(
+            challenge_hash="91698717955530315133405947771692390048583575882025109729287710097208243039173",
+            challenge_index=index,
+        )
+        # We want to get back from the miner:
+        # - the data chunk itself (to prove they still have it)
+        # - the random value to open the commitment
+        # - the merkle proof for the data chunk
+
+    # For each UID:
+    # - fetch which data they have (list of hashes)
+    # - randomly select a hash
+    # - fetch the commitments for that hash
+    # - randomly select a commitment/data_chunk
+    # - send the challenge to the miner
+
+    syn = protocol.Challenge(
+        challenge_hash=key_.split(".")[0],
+        commitment=commitment,
+        merkle_root=merkle_root,
+        params=params,
+        index=index,
+    )
     # We want to get back from the miner:
     # - the data chunk itself (to prove they still have it)
     # - the random value to open the commitment
@@ -143,7 +196,14 @@ def StoreRandomData():
             json.dumps(response_storage).encode()
         ).decode("utf-8")
         # Store in the database according to the data hash and the miner hotkey
-        database.set(key, response_storage)
+        database.set(key, response_storage_encoded)
+
+
+def ChallengeAndUpdate():
+    # TODO: come up with an algorithm for properly challenging miners and
+    # ensure an even spread statistically of which miners are queried, and
+    # which indices are queried (gaussian randomness?)
+    pass
 
 
 # Step 2: Set up the configuration parser
@@ -349,9 +409,9 @@ def main(config):
             exit()
 
 
-# # The main function parses the configuration and runs the validator.
-# if __name__ == "__main__":
-#     # Parse the configuration.
-#     config = get_config()
-#     # Run the main function.
-#     main(config)
+# The main function parses the configuration and runs the validator.
+if __name__ == "__main__":
+    # Parse the configuration.
+    config = get_config()
+    # Run the main function.
+    main(config)

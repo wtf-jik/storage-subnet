@@ -1,8 +1,76 @@
+import json
 import hashlib
 import binascii
 
 
 class MerkleTree(object):
+    """
+    Represents a Merkle Tree, a data structure used for efficiently summarizing and verifying the
+    integrity of large sets of data. The Merkle Tree is a binary tree where each leaf node is the hash
+    of a data block and every non-leaf node is the hash of its children nodes.
+
+    Attributes:
+        hash_function (callable): The hash function used for generating hashes of the blocks
+                                  and non-leaf nodes in the Merkle Tree.
+        leaves (list): A list where each element is a bytearray representing the hashed value of a leaf.
+        levels (list of lists): A list of lists where each sublist represents a level of the tree, starting
+                                from the leaves up to the root.
+        is_ready (bool): Indicates whether the tree has been fully constructed and is ready to provide
+                         the Merkle root and proofs.
+
+    Methods:
+        add_leaf(values, do_hash=False): Adds one or multiple leaves to the tree. If `do_hash` is True,
+                                         it will hash the values before adding them as leaves.
+        get_leaf(index): Retrieves the hexadecimal string representation of a leaf at the given index.
+        get_leaf_count(): Returns the total number of leaves in the tree.
+        get_tree_ready_state(): Checks if the tree has been fully constructed.
+        make_tree(): Constructs the Merkle Tree from the current leaves. This method must be called
+                     after all leaves are added and before retrieving the Merkle root or proofs.
+        get_merkle_root(): Retrieves the Merkle root as a hexadecimal string if the tree is ready.
+        get_proof(index): Generates a proof of inclusion for the leaf at the given index. This proof
+                          consists of a list of sibling hashes that, when combined with the target leaf,
+                          can reproduce the Merkle root.
+        update_leaf(index, new_value): Updates the value of the leaf at the given index with `new_value`
+                                      and recalculates the hashes up the tree to reflect this change.
+        serialize(): Converts the Merkle Tree into a JSON-formatted string for storage or transmission.
+        deserialize(json_data, hash_type="sha3_256"): Reconstructs the Merkle Tree from a JSON string,
+                                                      using the specified hash function.
+
+    Raises:
+        Exception: If the `hash_type` provided during initialization is not supported or recognized.
+
+    Example:
+        # Create a Merkle tree using the SHA3-256 hash function
+        merkle_tree = MerkleTree(hash_type='sha3_256')
+
+        # Add data blocks (as leaves) to the tree
+        merkle_tree.add_leaf(['block1', 'block2', 'block3'], do_hash=True)
+
+        # Construct the tree
+        merkle_tree.make_tree()
+
+        # Retrieve the Merkle root
+        root = merkle_tree.get_merkle_root()
+
+        # Get proof of inclusion for the first data block
+        proof = merkle_tree.get_proof(0)
+
+        # Update the value of the first leaf and reconstruct the tree
+        merkle_tree.update_leaf(0, 'new_block1_hashed_value')
+        merkle_tree.make_tree()
+
+        # Serialize the tree for storage
+        serialized_tree = merkle_tree.serialize()
+
+        # Deserialize the tree for later use
+        deserialized_tree = MerkleTree.deserialize(serialized_tree, hash_type='sha3_256')
+
+    Note:
+        The hash_function attribute is determined by the hash_type parameter provided at initialization.
+        Only hash types supported by the `hashlib` library can be used. Attempting to use an unsupported
+        hash type will result in an exception.
+    """
+
     def __init__(self, hash_type="sha3_256"):
         hash_type = hash_type.lower()
         if hash_type in ["sha3_256"]:
@@ -11,6 +79,11 @@ class MerkleTree(object):
             raise Exception("`hash_type` {} nor supported".format(hash_type))
 
         self.reset_tree()
+
+    def __eq__(self, other):
+        if not isinstance(other, MerkleTree):
+            return False
+        return self.serialize() == other.serialize()
 
     def _to_hex(self, x):
         try:  # python3
@@ -61,6 +134,12 @@ class MerkleTree(object):
         ] + self.levels  # prepend new level
 
     def make_tree(self):
+        """
+        Constructs the Merkle Tree from the leaves that have been added.
+
+        This must be called after adding all the leaves and before calling
+        get_merkle_root or get_proof to ensure the tree is constructed.
+        """
         self.is_ready = False
         if self.get_leaf_count() > 0:
             self.levels = [
@@ -80,6 +159,40 @@ class MerkleTree(object):
             return None
 
     def get_proof(self, index):
+        """
+        Generates the proof for the existence of a leaf at the specified index within the Merkle Tree.
+
+        A Merkle proof is a collection of sibling hashes on the path from a leaf to the root of the tree.
+        This proof can be used to independently verify that a leaf is indeed part of the Merkle tree without
+        needing the entire tree. Each element of the proof shows the direction ('left' or 'right') and the
+        corresponding hash that pairs with the path to the root.
+
+        Parameters:
+            index (int): The index of the target leaf for which to generate the Merkle proof. The index must
+                         correspond to the position of the leaf in the original list of leaves when the tree
+                         was constructed.
+
+        Returns:
+            list of dicts: A list where each dictionary contains a single key-value pair. The key is either
+                           'left' or 'right', indicating the side of the sibling hash, and the value is a
+                           string representing the hexadecimal hash value of the sibling. If the tree is not
+                           ready or the index is out of bounds, None is returned.
+
+        Raises:
+            IndexError: If the index provided is not within the range of the leaves in the tree.
+            ValueError: If the tree has not been constructed by calling `make_tree` method, or the index
+                        is not an integer.
+
+        Example:
+            # Assuming `merkle_tree` is an instance of `MerkleTree` and has been populated with leaves and made ready
+            proof = merkle_tree.get_proof(2)
+            print(proof)  # Outputs something like [{'left': 'abcd...'}, {'right': 'ef01...'}]
+
+        Note:
+            The Merkle proof is only valid if the tree is in the ready state (`is_ready` attribute is True),
+            which occurs after the `make_tree` method has been called. If the tree is not ready or the index
+            is not valid, the method will return None.
+        """
         if self.levels is None:
             return None
         elif not self.is_ready or index > len(self.leaves) - 1 or index < 0:
@@ -102,7 +215,40 @@ class MerkleTree(object):
             return proof
 
     def update_leaf(self, index, new_value):
-        """Update a specific leaf in the tree and propagate changes upwards."""
+        """
+        Updates the value of a leaf at a given index in the Merkle Tree and recalculates the hashes along
+        the path from the updated leaf to the root of the tree to reflect the change.
+
+        This method allows the Merkle Tree to maintain integrity by ensuring that any updates to the leaf
+        nodes are propagated upwards, resulting in a new Merkle root that represents the current state of
+        the leaves.
+
+        Parameters:
+            index (int): The index of the leaf to update. The index is zero-based and must be less than
+                         the number of leaves in the tree.
+            new_value (str): The new value in hexadecimal format to which the leaf should be updated. This
+                             value should be a valid hexadecimal string that represents the hashed data
+                             if hashing was applied to the leaves upon tree construction.
+
+        Returns:
+            None
+
+        Raises:
+            ValueError: If the tree is not ready for updates (i.e., `is_ready` is False), if the index is
+                        not an integer, if the new_value is not a hexadecimal string, or if the index is
+                        out of bounds (less than 0 or greater than or equal to the number of leaves).
+            IndexError: If the index is out of the range of current leaves.
+
+        Example:
+            # Assuming `merkle_tree` is an instance of `MerkleTree`, populated with leaves and made ready.
+            merkle_tree.update_leaf(0, 'a1b2c3d4e5f67890')
+            # The leaf at index 0 is updated, and changes are propagated to the root.
+
+        Note:
+            The tree must have been constructed and be in a ready state before calling this method. If the
+            tree has not been made by calling the `make_tree` method, or the index is invalid, this method
+            will not perform an update and will return None.
+        """
         if not self.is_ready:
             return None
         new_value = bytearray.fromhex(new_value)
@@ -119,8 +265,87 @@ class MerkleTree(object):
             ).digest()
             index = parent_index
 
+    def serialize(self):
+        """
+        Serializes the MerkleTree object into a JSON string.
+        """
+        # Convert the bytearray leaves and levels to hex strings for serialization
+        leaves = [self._to_hex(leaf) for leaf in self.leaves]
+        levels = None
+        if self.levels is not None:
+            levels = []
+            for level in self.levels:
+                levels.append([self._to_hex(item) for item in level])
+
+        # Construct a dictionary with the MerkleTree properties
+        merkle_tree_data = {
+            "leaves": leaves,
+            "levels": levels,
+            "is_ready": self.is_ready,
+        }
+
+        # Convert the dictionary to a JSON string
+        return json.dumps(merkle_tree_data)
+
+    @classmethod
+    def deserialize(cls, json_data, hash_type="sha3_256"):
+        """
+        Deserializes the JSON string into a MerkleTree object.
+        """
+        # Convert the JSON string back to a dictionary
+        merkle_tree_data = json.loads(json_data)
+
+        # Create a new MerkleTree object
+        m_tree = cls(hash_type)
+
+        # Convert the hex strings back to bytearrays and set the leaves and levels
+        m_tree.leaves = [bytearray.fromhex(leaf) for leaf in merkle_tree_data["leaves"]]
+        if merkle_tree_data["levels"] is not None:
+            m_tree.levels = []
+            for level in merkle_tree_data["levels"]:
+                m_tree.levels.append([bytearray.fromhex(item) for item in level])
+        m_tree.is_ready = merkle_tree_data["is_ready"]
+
+        return m_tree
+
 
 def validate_merkle_proof(proof, target_hash, merkle_root, hash_type="sha3_256"):
+    """
+    Validates a Merkle proof, verifying that a target element is part of a Merkle tree with a given root.
+
+    A Merkle proof is a sequence of hashes that, when combined with the target hash through the hash function
+    specified by `hash_type`, should result in the Merkle root if the target hash is indeed part of the tree.
+
+    Parameters:
+        proof (list of dicts): A list of dictionaries where each dictionary has one key, either 'left' or 'right',
+            corresponding to whether the sibling hash at that level in the tree is to the left or right of the path
+            leading to the target hash.
+        target_hash (str): The hexadecimal string representation of the target hash being proven as part of the tree.
+        merkle_root (str): The hexadecimal string representation of the Merkle root of the tree to which the target
+            hash is being validated against.
+        hash_type (str, optional): The type of hash function used to construct the Merkle tree. This must match the
+            hash function used in constructing the original Merkle tree. Defaults to "sha3_256", and it must be an
+            attribute of the `hashlib` module that takes a bytes object and returns a hash object that has a `digest`
+            method.
+
+    Returns:
+        bool: Returns True if the Merkle proof is valid and the target hash is part of the tree with the given root.
+              Returns False otherwise.
+
+    Raises:
+        AttributeError: If the `hash_type` specified is not an attribute of the `hashlib` module.
+        KeyError: If one of the dictionaries in `proof` does not have a 'left' or 'right' key.
+        ValueError: If `target_hash` or `merkle_root` or any of the sibling hashes in the proof dictionaries are not
+                    valid hexadecimal strings.
+
+    Example:
+        # Example of validating a Merkle proof
+        valid_proof = [{'left': 'abc...'}, {'right': 'def...'}]
+        target = 'a1b2c3...'
+        root = '123abc...'
+        is_valid = validate_merkle_proof(valid_proof, target, root)
+        print(is_valid)  # Outputs True if the proof is valid, False otherwise
+    """
     hash_func = getattr(hashlib, hash_type)
     merkle_root = bytearray.fromhex(merkle_root)
     target_hash = bytearray.fromhex(target_hash)
