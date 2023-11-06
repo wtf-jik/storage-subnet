@@ -52,14 +52,6 @@ from storage.utils import (
     verify_challenge,
 )
 
-# TEMP validator utils
-from storage.utils import (
-    encrypt_data,
-    make_random_file,
-    get_random_chunksize,
-)
-from storage import protocol
-
 
 def get_config():
     # Step 2: Set up the configuration parser
@@ -114,6 +106,29 @@ def get_config():
 
 
 def commit_data(committer, data_chunks, n_chunks):
+    """
+    Commits a list of data chunks to a new Merkle tree and generates the associated randomness and ECC points.
+
+    This function takes a 'committer' object which should have a 'commit' method, a list of 'data_chunks', and
+    an integer 'n_chunks' specifying the number of chunks to commit. It commits each chunk of data to the Merkle tree,
+    collecting the ECC points and randomness values for each commitment, and then constructs the Merkle tree from
+    all committed chunks.
+
+    Args:
+        committer: An object that has a 'commit' method for committing data chunks.
+        data_chunks (list): A list of data chunks to be committed.
+        n_chunks (int): The number of data chunks expected to be committed.
+
+    Returns:
+        tuple: A tuple containing four elements:
+            - randomness (list): A list of randomness values for each committed chunk.
+            - chunks (list): The original list of data chunks that were committed.
+            - points (list): A list of hex strings representing the ECC points for each commitment.
+            - merkle_tree (MerkleTree): A Merkle tree object that contains the commitments as leaves.
+
+    Raises:
+        ValueError: If the length of data_chunks is not equal to n_chunks.
+    """
     merkle_tree = MerkleTree()
 
     # Commit each chunk of data
@@ -132,6 +147,28 @@ def commit_data(committer, data_chunks, n_chunks):
 
 
 def recommit_data(committer, challenge_index, merkle_tree, data_chunk):
+    """
+    Recommit a single data chunk at the specified index in the Merkle tree and update the tree.
+
+    This function recomputes the commitment for a single data chunk at the given challenge_index within the provided
+    Merkle tree. It is intended to be used when a specific chunk in the Merkle tree needs to be updated. The function
+    returns the new randomness, the updated ECC point as a hex string, and the new Merkle tree with the updated commitment.
+
+    Args:
+        committer: An object that has a 'commit' method for committing data chunks.
+        challenge_index (int): The index of the data chunk in the Merkle tree that needs to be re-committed.
+        merkle_tree (MerkleTree): The Merkle tree that contains the current commitments.
+        data_chunk: The new data chunk that will replace the existing commitment at challenge_index.
+
+    Returns:
+        tuple: A tuple containing three elements:
+            - randomness: The randomness value associated with the new commitment.
+            - point (str): A hex string representing the new ECC point for the commitment.
+            - new_merkle_tree (MerkleTree): The updated Merkle tree object.
+
+    Raises:
+        IndexError: If challenge_index is not a valid index for the Merkle tree leaves.
+    """
     # Commit each chunk of data
     new_merkle_tree = copy.deepcopy(merkle_tree)
     c, m_val, r = committer.commit(data_chunk)
@@ -144,45 +181,6 @@ def recommit_data(committer, challenge_index, merkle_tree, data_chunk):
         point,
         new_merkle_tree,
     )
-
-
-def GetSynapse(config):
-    # Setup CRS for this round of validation
-    g, h = setup_CRS(curve=config.curve)
-
-    # Make a random bytes file to test the miner
-    random_data = make_random_file(maxsize=config.maxsize)
-
-    # Random encryption key for now (never will decrypt)
-    key = get_random_bytes(32)  # 256-bit key
-
-    # Encrypt the data
-    encrypted_data, nonce, tag = encrypt_data(
-        random_data,
-        key,  # TODO: Use validator key as the encryption key?
-    )
-
-    # Convert to base64 for compactness
-    b64_encrypted_data = base64.b64encode(encrypted_data).decode("utf-8")
-
-    # Hash the encrypted data
-    data_hash = hash_data(encrypted_data)
-
-    # Chunk the data
-    chunk_size = get_random_chunksize()
-    chunks = list(chunk_data(encrypted_data, chunk_size))
-
-    syn = synapse = protocol.Store(
-        chunk_size=chunk_size,
-        encrypted_data=b64_encrypted_data,
-        data_hash=data_hash,
-        curve=config.curve,
-        g=ecc_point_to_hex(g),
-        h=ecc_point_to_hex(h),
-        size=sys.getsizeof(encrypted_data),
-        n_chunks=len(chunks),
-    )
-    return synapse
 
 
 # Main takes the config and starts the miner.
@@ -276,6 +274,24 @@ def main(config):
 
     # This is the core miner function, which decides the miner's response to a valid, high-priority request.
     def store(synapse: storage.protocol.Store) -> storage.protocol.Store:
+        """
+        Stores encrypted data chunks along with their commitments and the associated Merkle tree in the database.
+
+        This function decodes the encrypted data provided in the synapse object, chunks it, and creates cryptographic
+        commitments for each chunk using elliptic curve cryptography. The commitments and randomness values are stored
+        along with a serialized Merkle tree. Finally, it verifies that the storage can be correctly retrieved and decoded,
+        preparing the synapse object with necessary return values for the validator.
+
+        Args:
+            synapse (storage.protocol.Store): An object containing storage request parameters, including encrypted data,
+                                            chunk size, curve information, and data hash for storage indexing.
+
+        Returns:
+            storage.protocol.Store: The updated synapse object containing commitments and the Merkle root of the stored data.
+
+        Raises:
+            Any exception raised by the underlying storage, encoding, or cryptographic functions will be propagated.
+        """
         # Chunk the data according to the specified (random) chunk size
         encrypted_data_bytes = base64.b64decode(synapse.encrypted_data)
         data_chunks = chunk_data(encrypted_data_bytes, synapse.chunk_size)
@@ -311,6 +327,29 @@ def main(config):
         return synapse
 
     def challenge(synapse: storage.protocol.Challenge) -> storage.protocol.Challenge:
+        """
+        Responds to a challenge by providing a specific data chunk, its randomness, and a Merkle proof from the storage.
+
+        When challenged, this function retrieves the stored commitments, selects the specified data chunk and its
+        corresponding randomness value and Merkle proof based on the challenge index. It also re-commits to the data chunk,
+        updates the miner storage with the new commitment and Merkle tree, and returns the challenge object with the
+        necessary data for verification.
+
+        Args:
+            synapse (storage.protocol.Challenge): An object containing challenge parameters, including the challenge index,
+                                                curve information, and the challenge hash for retrieving the stored data.
+
+        Returns:
+            storage.protocol.Challenge: The updated synapse object containing the requested chunk, its randomness value,
+                                        the corresponding Merkle proof, and the updated commitment and Merkle root.
+
+        Raises:
+            Any exception raised by the underlying storage, encoding, or cryptographic functions will be propagated.
+
+        Notes:
+            The database update operation is a critical section of the code that ensures the miner's storage is up-to-date
+            with the latest commitments, in case of concurrent challenge requests.
+        """
         # Retrieve commitments from local storage
         data = database.get(synapse.challenge_hash)
         decoded_data = decode_miner_storage(data, syn.curve)
@@ -352,21 +391,26 @@ def main(config):
 
         return synapse
 
-    syn = GetSynapse(config)
-    response = store(syn)
+    if False:  # (debugging)
+        syn = GetSynapse(config)
+        response = store(syn)
 
-    cyn = protocol.Challenge(
-        challenge_hash=syn.data_hash, challenge_index=0, curve="P-256", g=syn.g, h=syn.h
-    )
-    response = challenge(cyn)
+        cyn = storage.protocol.Challenge(
+            challenge_hash=syn.data_hash,
+            challenge_index=0,
+            curve="P-256",
+            g=syn.g,
+            h=syn.h,
+        )
+        response = challenge(cyn)
 
-    verified = verify_challenge(response)
+        verified = verify_challenge(response)
 
-    print(f"Is verified: {verified}")
+        print(f"Is verified: {verified}")
 
-    import pdb
+        import pdb
 
-    pdb.set_trace()
+        pdb.set_trace()
 
     # TODO: Validator code to update storage after challenge is successful
     # TODO: Encoding and decoding of merkle proofs on challenege

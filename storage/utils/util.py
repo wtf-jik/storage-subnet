@@ -16,6 +16,20 @@ from .merkle import MerkleTree
 
 
 def make_random_file(name=None, maxsize=1024):
+    """
+    Creates a file with random binary data or returns a bytes object with random data if no name is provided.
+
+    Args:
+        name (str, optional): The name of the file to create. If None, the function returns the random data instead.
+        maxsize (int): The maximum size of the file or bytes object to be created, in bytes. Defaults to 1024.
+
+    Returns:
+        bytes: If 'name' is not provided, returns a bytes object containing random data.
+        None: If 'name' is provided, a file is created and nothing is returned.
+
+    Raises:
+        OSError: If the function encounters an error while writing to the file.
+    """
     size = random.randint(128, maxsize)
     data = os.urandom(size)
     if isinstance(name, str):
@@ -27,10 +41,35 @@ def make_random_file(name=None, maxsize=1024):
 
 # Determine a random chunksize between 2kb-128kb (random sample from this range) store as chunksize_E
 def get_random_chunksize(maxsize=128):
+    """
+    Determines a random chunk size within a specified range for data chunking.
+
+    Args:
+        maxsize (int): The maximum size limit for the random chunk size. Defaults to 128.
+
+    Returns:
+        int: A random chunk size between 2kb and 'maxsize' kilobytes.
+
+    Raises:
+        ValueError: If maxsize is set to a value less than 2.
+    """
     return random.randint(2, maxsize)
 
 
 def chunk_data(data, chunksize: int):
+    """
+    Generator function that chunks the given data into pieces of a specified size.
+
+    Args:
+        data (bytes): The binary data to be chunked.
+        chunksize (int): The size of each chunk in bytes.
+
+    Yields:
+        bytes: A chunk of the data with the size equal to 'chunksize' or the remaining size of data.
+
+    Raises:
+        ValueError: If 'chunksize' is less than or equal to 0.
+    """
     for i in range(0, len(data), chunksize):
         yield data[i : i + chunksize]
 
@@ -85,6 +124,20 @@ def encrypt_data(filename, key):
 
 
 def decode_storage(encoded_storage):
+    """
+    Decodes a base64-encoded string that represents storage data. This storage data is expected
+    to contain 'commitments' and 'params', where 'commitments' will be further decoded using
+    a separate function, and 'params' are base64-decoded and then JSON-decoded.
+
+    Args:
+        encoded_storage (str): A base64-encoded string representing storage data.
+
+    Returns:
+        dict: A dictionary with the decoded storage data, including 'commitments' and 'params'.
+
+    Raises:
+        ValueError: If encoded_storage is not a valid base64-encoded string or the JSON decoding fails.
+    """
     decoded_storage = base64.b64decode(encoded_storage).decode("utf-8")
     dict_storage = json.loads(decoded_storage)
     dict_storage["commitments"] = decode_commitments(dict_storage["commitments"])
@@ -95,6 +148,19 @@ def decode_storage(encoded_storage):
 
 
 def b64_encode(data):
+    """
+    Encodes the given data into a base64 string. If the data is a list or dictionary of bytes, it converts
+    the bytes into hexadecimal strings before encoding.
+
+    Args:
+        data (list or dict): The data to be base64 encoded. Can be a list of bytes or a dictionary with bytes values.
+
+    Returns:
+        str: The base64 encoded string of the input data.
+
+    Raises:
+        TypeError: If the input is not a list, dict, or bytes.
+    """
     if isinstance(data, list) and isinstance(data[0], bytes):
         data = [d.hex() for d in data]
     if isinstance(data, dict) and isinstance(data[list(data.keys())[0]], bytes):
@@ -103,6 +169,20 @@ def b64_encode(data):
 
 
 def b64_decode(data, decode_hex=False):
+    """
+    Decodes a base64 string into a list or dictionary. If decode_hex is True, it converts any hexadecimal strings
+    within the data back into bytes.
+
+    Args:
+        data (bytes or str): The base64 encoded data to be decoded.
+        decode_hex (bool): A flag to indicate whether to decode hex strings into bytes. Defaults to False.
+
+    Returns:
+        list or dict: The decoded data. Returns a list if the original encoded data was a list, and a dict if it was a dict.
+
+    Raises:
+        ValueError: If the input is not properly base64 encoded or if hex decoding fails.
+    """
     data = data.decode("utf-8") if isinstance(data, bytes) else data
     decoded_data = json.loads(base64.b64decode(data).decode("utf-8"))
     if decode_hex:
@@ -118,6 +198,20 @@ def b64_decode(data, decode_hex=False):
 
 
 def encode_miner_storage(**kwargs):
+    """
+    Encodes miner storage data, including randomness, data chunks, commitments, and the Merkle tree into a
+    base64-encoded JSON byte string.
+
+    Args:
+        **kwargs: Keyword arguments containing 'randomness', 'data_chunks', 'commitments', and 'merkle_tree'.
+
+    Returns:
+        bytes: The encoded byte string containing all the miner storage data.
+
+    Note:
+        This function expects the 'commitments' keyword argument to be a list of EccPoint objects, which will be
+        converted to hex strings before encoding.
+    """
     randomness = kwargs.get("randomness")
     chunks = kwargs.get("data_chunks")
     points = kwargs.get("commitments")
@@ -139,6 +233,20 @@ def encode_miner_storage(**kwargs):
 
 
 def decode_miner_storage(encoded_storage, curve):
+    """
+    Decodes miner storage data from a base64-encoded JSON byte string into its components.
+
+    Args:
+        encoded_storage (bytes): The encoded byte string of the miner storage data.
+        curve (Crypto.PublicKey.ECC.Curve): The elliptic curve used for ECC points.
+
+    Returns:
+        dict: A dictionary containing the decoded 'randomness', 'data_chunks', 'commitments', and 'merkle_tree'.
+
+    Note:
+        This function converts 'commitments' back from hex strings to EccPoint objects and deserializes the
+        'merkle_tree'.
+    """
     xy = json.loads(encoded_storage.decode("utf-8"))
     xz = {
         k: b64_decode(v, decode_hex=True if k != "commitments" else False)
@@ -150,6 +258,20 @@ def decode_miner_storage(encoded_storage, curve):
 
 
 def validate_merkle_proof(proof, target_hash, merkle_root):
+    """
+    Validates a Merkle proof by computing the hash path from the target hash to the expected Merkle root.
+
+    Args:
+        proof (list of dicts): The Merkle proof, each entry containing a 'left' or 'right' sibling hash.
+        target_hash (str): The hex string of the hash of the target data.
+        merkle_root (str): The hex string of the expected Merkle root.
+
+    Returns:
+        bool: True if the proof is valid and the computed hash path matches the Merkle root, False otherwise.
+
+    Raises:
+        ValueError: If proof elements do not contain a 'left' or 'right' key.
+    """
     merkle_root = bytearray.fromhex(merkle_root)
     target_hash = bytearray.fromhex(target_hash)
     if len(proof) == 0:
@@ -169,6 +291,23 @@ def validate_merkle_proof(proof, target_hash, merkle_root):
 
 
 def verify_challenge(synapse):
+    """
+    Verifies the validity of a challenge response by opening the commitment and validating the Merkle proof.
+
+    Args:
+        synapse: An object containing challenge data, including the commitment, the data chunk, the random value used
+                 in the commitment, the elliptic curve, and the Merkle proof.
+
+    Returns:
+        bool: True if both the commitment opens correctly and the Merkle proof is valid, False otherwise.
+
+    Raises:
+        Any exceptions raised by the underlying cryptographic functions are propagated.
+
+    Note:
+        The TODO in the function indicates that additional type checks and defensive programming practices should be
+        implemented to handle various input types for robustness.
+    """
     # TODO: Add checks and defensive programming here to handle all types
     # (bytes, str, hex, ecc point, etc)
     committer = ECCommitment(

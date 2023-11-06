@@ -199,6 +199,13 @@ def StoreRandomData():
         database.set(key, response_storage_encoded)
 
 
+def ChallengeAndUpdate():
+    # TODO: come up with an algorithm for properly challenging miners and
+    # ensure an even spread statistically of which miners are queried, and
+    # which indices are queried (gaussian randomness?)
+    pass
+
+
 # Step 2: Set up the configuration parser
 # This function is responsible for setting up and parsing command-line arguments.
 def get_config():
@@ -402,9 +409,9 @@ def main(config):
             exit()
 
 
-# # The main function parses the configuration and runs the validator.
-# if __name__ == "__main__":
-#     # Parse the configuration.
-#     config = get_config()
-#     # Run the main function.
-#     main(config)
+# The main function parses the configuration and runs the validator.
+if __name__ == "__main__":
+    # Parse the configuration.
+    config = get_config()
+    # Run the main function.
+    main(config)
