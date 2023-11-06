@@ -1,6 +1,7 @@
 import os
 import json
 import base64
+import hashlib
 import binascii
 from collections import defaultdict
 from typing import Dict, List, Any
@@ -10,7 +11,7 @@ from Crypto.Random import random
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 
-from .ecc import hex_to_ecc_point, ecc_point_to_hex
+from .ecc import hex_to_ecc_point, ecc_point_to_hex, hash_data, ECCommitment
 from .merkle import MerkleTree
 
 
@@ -241,3 +242,46 @@ def GetSynapse(config):
         size=sys.getsizeof(encrypted_data),
     )
     return synapse
+
+
+def validate_merkle_proof(proof, target_hash, merkle_root):
+    merkle_root = bytearray.fromhex(merkle_root)
+    target_hash = bytearray.fromhex(target_hash)
+    if len(proof) == 0:
+        return target_hash == merkle_root
+    else:
+        proof_hash = target_hash
+        for p in proof:
+            try:
+                # the sibling is a left node
+                sibling = bytearray.fromhex(p["left"])
+                proof_hash = hashlib.sha3_256(sibling + proof_hash).digest()
+            except:
+                # the sibling is a right node
+                sibling = bytearray.fromhex(p["right"])
+                proof_hash = hashlib.sha3_256(proof_hash + sibling).digest()
+        return proof_hash == merkle_root
+
+
+def verify_challenge(synapse):
+    # TODO: Add checks and defensive programming here to handle all types
+    # (bytes, str, hex, ecc point, etc)
+    committer = ECCommitment(
+        hex_to_ecc_point(synapse.g, synapse.curve),
+        hex_to_ecc_point(synapse.h, synapse.curve),
+    )
+    commitment = hex_to_ecc_point(synapse.commitment, synapse.curve)
+
+    if not committer.open(
+        commitment, hash_data(synapse.data_chunk), synapse.random_value
+    ):
+        print(f"Opening commitment failed")
+        return False
+
+    if not validate_merkle_proof(
+        synapse.merkle_proof, ecc_point_to_hex(commitment), synapse.merkle_root
+    ):
+        print(f"Merkle proof validation failed")
+        return False
+
+    return True

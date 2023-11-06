@@ -51,6 +51,7 @@ from storage.utils import (
     decode_miner_storage,
     serialize_dict_with_bytes,
     deserialize_dict_with_bytes,
+    verify_challenge,
 )
 
 # TEMP validator utils
@@ -353,44 +354,22 @@ def main(config):
 
         return synapse
 
-    # syn = GetSynapse(config)
-    # response = store(syn)
-    # cyn = protocol.Challenge(
-    #     challenge_hash=syn.data_hash, challenge_index=0, curve="P-256", g=syn.g, h=syn.h
-    # )
-    # data = database.get(cyn.challenge_hash)
-    # decoded_data = decode_miner_storage(data, syn.curve)
+    syn = GetSynapse(config)
+    response = store(syn)
 
-    # # Select data to return based on challenge index
-    # merkle_tree = copy.deepcopy(decoded_data["merkle_tree"])
-    # cyn.commitment = ecc_point_to_hex(decoded_data["commitments"][cyn.challenge_index])
-    # cyn.random_value = decoded_data["randomness"][cyn.challenge_index]
-    # cyn.merkle_root = decoded_data["merkle_tree"].get_merkle_root()
-    # cyn.data_chunk = decoded_data["data_chunks"][cyn.challenge_index]
-    # cyn.merkle_proof = decoded_data["merkle_tree"].get_proof(cyn.challenge_index)
+    cyn = protocol.Challenge(
+        challenge_hash=syn.data_hash, challenge_index=0, curve="P-256", g=syn.g, h=syn.h
+    )
+    response = challenge(cyn)
 
-    # # Recommit to pieces we just opened (because we send random secret value)
-    # committer = ECCommitment(
-    #     hex_to_ecc_point(cyn.g, cyn.curve), hex_to_ecc_point(cyn.h, cyn.curve)
-    # )
-    # new_randomness, new_point, new_merkle_tree = recommit_data(
-    #     committer, cyn.challenge_index, decoded_data["merkle_tree"], cyn.data_chunk
-    # )
-    # cyn.new_commitment = new_point
-    # cyn.new_merkle_root = new_merkle_tree.get_merkle_root()
+    verified = verify_challenge(response)
 
-    # # Update miner storage for next challenge
-    # decoded_data["randomness"][cyn.challenge_index] = new_randomness
-    # decoded_data["commitments"][cyn.challenge_index] = hex_to_ecc_point(
-    #     new_point, cyn.curve
-    # )
-    # decoded_data["merkle_tree"] = new_merkle_tree
-    # database.set(cyn.challenge_hash, encode_miner_storage(**decoded_data))
-    # print("database updated!")
+    print(f"Is verified: {verified}")
 
-    # import pdb
+    import pdb
 
-    # pdb.set_trace()
+    pdb.set_trace()
+
     # Step 6: Build and link miner functions to the axon.
     # The axon handles request processing, allowing validators to send this process requests.
     axon = bt.axon(wallet=wallet, config=config)
