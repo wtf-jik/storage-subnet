@@ -84,63 +84,6 @@ def encrypt_data(filename, key):
     return cipher_text, cipher.nonce, tag
 
 
-def serialize_dict_with_bytes(commitments: Dict[int, Dict[str, Any]]) -> str:
-    # Convert our custom objects to serializable objects
-    for commitment in commitments:
-        # Check if 'point' is a bytes-like object, if not, it's already a string (hex)
-        if isinstance(commitment.get("point"), bytes):
-            commitment["point"] = commitment["point"].hex()
-
-        if commitment.get("data_chunk"):
-            commitment["data_chunk"] = commitment["data_chunk"].hex()
-
-        # Similarly, check for 'merkle_proof' and convert if necessary
-        if commitment.get("merkle_proof"):
-            serialized_merkle_proof = []
-            for proof in commitment["merkle_proof"]:
-                serialized_proof = {}
-                for side, value in proof.items():
-                    # Check if value is a bytes-like object, if not, it's already a string (hex)
-                    if isinstance(value, bytes):
-                        serialized_proof[side] = value.hex()
-                    else:
-                        serialized_proof[side] = value
-                serialized_merkle_proof.append(serialized_proof)
-            commitment["merkle_proof"] = serialized_merkle_proof
-
-        # Randomness is an integer and should be safely converted to string without checking type
-        if commitment.get("randomness"):
-            commitment["randomness"] = str(commitment["randomness"])
-
-    # Convert the entire structure to JSON
-    return json.dumps(commitments)
-
-
-# Deserializer function
-def deserialize_dict_with_bytes(serialized: str) -> Dict[int, Dict[str, Any]]:
-    def hex_to_bytes(hex_str: str) -> bytes:
-        return bytes.fromhex(hex_str)
-
-    def deserialize_helper(d: Dict[str, Any]) -> Dict[str, Any]:
-        for key, value in d.items():
-            if key == "data_chunk":
-                d[key] = hex_to_bytes(value)
-            elif key == "randomness":
-                d[key] = int(value)
-            elif key == "merkle_proof" and value is not None:
-                d[key] = [{k: v for k, v in item.items()} for item in value]
-        return d
-
-    # Parse the JSON string back to a dictionary
-    return json.loads(serialized, object_hook=deserialize_helper)
-
-
-def decode_commitments(encoded_commitments):
-    decoded_commitments = base64.b64decode(encoded_commitments)
-    commitments = deserialize_dict_with_bytes(decoded_commitments)
-    return commitments
-
-
 def decode_storage(encoded_storage):
     decoded_storage = base64.b64decode(encoded_storage).decode("utf-8")
     dict_storage = json.loads(decoded_storage)
@@ -204,44 +147,6 @@ def decode_miner_storage(encoded_storage, curve):
     xz["commitments"] = [hex_to_ecc_point(c, curve) for c in xz["commitments"]]
     xz["merkle_tree"] = MerkleTree().deserialize(xz["merkle_tree"])
     return xz
-
-
-def GetSynapse(config):
-    # Setup CRS for this round of validation
-    g, h = setup_CRS(curve=config.curve)
-
-    # Make a random bytes file to test the miner
-    random_data = make_random_file(maxsize=config.maxsize)
-
-    # Random encryption key for now (never will decrypt)
-    key = get_random_bytes(32)  # 256-bit key
-
-    # Encrypt the data
-    encrypted_data, nonce, tag = encrypt_data(
-        random_data,
-        key,  # TODO: Use validator key as the encryption key?
-    )
-
-    # Convert to base64 for compactness
-    b64_encrypted_data = base64.b64encode(encrypted_data).decode("utf-8")
-
-    # Hash the encrypted data
-    data_hash = hash_data(encrypted_data)
-
-    # Chunk the data
-    chunk_size = get_random_chunksize()
-    # chunks = list(chunk_data(encrypted_data, chunksize))
-
-    syn = synapse = protocol.Store(
-        chunk_size=chunk_size,
-        encrypted_data=b64_encrypted_data,
-        data_hash=data_hash,
-        curve=config.curve,
-        g=ecc_point_to_hex(g),
-        h=ecc_point_to_hex(h),
-        size=sys.getsizeof(encrypted_data),
-    )
-    return synapse
 
 
 def validate_merkle_proof(proof, target_hash, merkle_root):

@@ -49,8 +49,6 @@ from storage.utils import (
     b64_decode,
     encode_miner_storage,
     decode_miner_storage,
-    serialize_dict_with_bytes,
-    deserialize_dict_with_bytes,
     verify_challenge,
 )
 
@@ -308,7 +306,7 @@ def main(config):
         decoded_storage = decode_miner_storage(encoded_storage, synapse.curve)
 
         # Prepare return values to validator
-        encoded_commitments = miner_store["commitments"]
+        synapse.commitments = miner_store["commitments"]
         synapse.merkle_root = merkle_tree.get_merkle_root()
         return synapse
 
@@ -369,6 +367,12 @@ def main(config):
     import pdb
 
     pdb.set_trace()
+
+    # TODO: Validator code to update storage after challenge is successful
+    # TODO: Encoding and decoding of merkle proofs on challenege
+    # TODO: Defensive programming and error-handling around all functions
+    # TODO: Test over the wire if you can query these endpoints and get the right responses
+    # TODO: GUNdb mechanism on validator side for shared database (or first approx/sqlite?)
 
     # Step 6: Build and link miner functions to the axon.
     # The axon handles request processing, allowing validators to send this process requests.
