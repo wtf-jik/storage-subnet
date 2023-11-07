@@ -51,7 +51,6 @@ from storage.utils import (
     decode_miner_storage,
     verify_challenge,
 )
-from storage.utils import *
 
 
 def get_config():
@@ -147,43 +146,6 @@ def commit_data(committer, data_chunks, n_chunks):
     # Create the tree from the leaves
     merkle_tree.make_tree()
     return randomness, chunks, points, merkle_tree
-
-
-def recommit_data(committer, challenge_index, merkle_tree, data_chunk):
-    """
-    Recommit a single data chunk at the specified index in the Merkle tree and update the tree.
-
-    This function recomputes the commitment for a single data chunk at the given challenge_index within the provided
-    Merkle tree. It is intended to be used when a specific chunk in the Merkle tree needs to be updated. The function
-    returns the new randomness, the updated ECC point as a hex string, and the new Merkle tree with the updated commitment.
-
-    Args:
-        committer: An object that has a 'commit' method for committing data chunks.
-        challenge_index (int): The index of the data chunk in the Merkle tree that needs to be re-committed.
-        merkle_tree (MerkleTree): The Merkle tree that contains the current commitments.
-        data_chunk: The new data chunk that will replace the existing commitment at challenge_index.
-
-    Returns:
-        tuple: A tuple containing three elements:
-            - randomness: The randomness value associated with the new commitment.
-            - point (str): A hex string representing the new ECC point for the commitment.
-            - new_merkle_tree (MerkleTree): The updated Merkle tree object.
-
-    Raises:
-        IndexError: If challenge_index is not a valid index for the Merkle tree leaves.
-    """
-    # Commit each chunk of data
-    new_merkle_tree = copy.deepcopy(merkle_tree)
-    c, m_val, r = committer.commit(data_chunk)
-    randomness = r
-    point = c_hex = ecc_point_to_hex(c)
-    new_merkle_tree.update_leaf(challenge_index, c_hex)
-    # merkle_tree.make_tree() # TODO: check if we need this step
-    return (
-        randomness,
-        point,
-        new_merkle_tree,
-    )
 
 
 # Main takes the config and starts the miner.
@@ -377,55 +339,6 @@ def main(config):
         )
         synapse.merkle_root = merkle_tree.get_merkle_root()
         return synapse
-
-    def GetSynapse(config):
-        # Setup CRS for this round of validation
-        g, h = setup_CRS(curve=config.curve)
-
-        # Make a random bytes file to test the miner
-        random_data = make_random_file(maxsize=config.maxsize)
-
-        # Random encryption key for now (never will decrypt)
-        key = get_random_bytes(32)  # 256-bit key
-
-        # Encrypt the data
-        encrypted_data, nonce, tag = encrypt_data(
-            random_data,
-            key,  # TODO: Use validator key as the encryption key?
-        )
-
-        # Convert to base64 for compactness
-        b64_encrypted_data = base64.b64encode(encrypted_data).decode("utf-8")
-
-        # Hash the encrypted data
-        data_hash = hash_data(encrypted_data)
-
-        syn = synapse = storage.protocol.Store(
-            data_hash=data_hash,
-            encrypted_data=b64_encrypted_data,
-            curve=config.curve,
-            g=ecc_point_to_hex(g),
-            h=ecc_point_to_hex(h),
-        )
-        return synapse
-
-    if False:  # (debugging)
-        syn = GetSynapse(config)
-        response = store(syn)
-        cyn = storage.protocol.Challenge(
-            challenge_hash=hash_data(base64.b64decode(syn.encrypted_data)),
-            challenge_index=0,
-            chunk_size=111,
-            curve="P-256",
-            g=syn.g,
-            h=syn.h,
-        )
-        response = challenge(cyn)
-        verified = verify_challenge(response)
-        print(f"Is verified: {verified}")
-        import pdb
-
-        pdb.set_trace()
 
     # TODO: Validator code to update storage after challenge is successful
     # TODO: Encoding and decoding of merkle proofs on challenege
