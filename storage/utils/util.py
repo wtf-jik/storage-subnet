@@ -161,6 +161,8 @@ def b64_encode(data):
     Raises:
         TypeError: If the input is not a list, dict, or bytes.
     """
+    if isinstance(data, bytes):
+        data = data.hex()
     if isinstance(data, list) and isinstance(data[0], bytes):
         data = [d.hex() for d in data]
     if isinstance(data, dict) and isinstance(data[list(data.keys())[0]], bytes):
@@ -168,7 +170,7 @@ def b64_encode(data):
     return base64.b64encode(json.dumps(data).encode()).decode("utf-8")
 
 
-def b64_decode(data, decode_hex=False):
+def b64_decode(data, decode_hex=False, encrypted=False):
     """
     Decodes a base64 string into a list or dictionary. If decode_hex is True, it converts any hexadecimal strings
     within the data back into bytes.
@@ -184,7 +186,9 @@ def b64_decode(data, decode_hex=False):
         ValueError: If the input is not properly base64 encoded or if hex decoding fails.
     """
     data = data.decode("utf-8") if isinstance(data, bytes) else data
-    decoded_data = json.loads(base64.b64decode(data).decode("utf-8"))
+    decoded_data = json.loads(
+        base64.b64decode(data) if encrypted else base64.b64decode(data).decode("utf-8")
+    )
     if decode_hex:
         try:
             decoded_data = (
@@ -303,10 +307,6 @@ def verify_challenge(synapse):
 
     Raises:
         Any exceptions raised by the underlying cryptographic functions are propagated.
-
-    Note:
-        The TODO in the function indicates that additional type checks and defensive programming practices should be
-        implemented to handle various input types for robustness.
     """
     # TODO: Add checks and defensive programming here to handle all types
     # (bytes, str, hex, ecc point, etc)
@@ -317,13 +317,15 @@ def verify_challenge(synapse):
     commitment = hex_to_ecc_point(synapse.commitment, synapse.curve)
 
     if not committer.open(
-        commitment, hash_data(synapse.data_chunk), synapse.random_value
+        commitment, hash_data(synapse.data_chunk), synapse.randomness
     ):
         print(f"Opening commitment failed")
         return False
 
     if not validate_merkle_proof(
-        synapse.merkle_proof, ecc_point_to_hex(commitment), synapse.merkle_root
+        b64_decode(synapse.merkle_proof),
+        ecc_point_to_hex(commitment),
+        synapse.merkle_root,
     ):
         print(f"Merkle proof validation failed")
         return False
