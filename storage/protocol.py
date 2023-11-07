@@ -27,30 +27,25 @@ from Crypto.PublicKey import ECC
 class Store(bt.Synapse):
     # TODO: write deserialize
 
-    # Receieves
+    # Data to store
     encrypted_data: str  # base64 encoded string of encrypted data (bytes)
-    data_hash: str  # the hash of the encrypted data
-    chunk_size: int  # bytes (e.g. 1024) for how big the chunks should be
-    n_chunks: int  # expected number of chunks
-    size: typing.Optional[int]  # bytes (e.g. 9234) size of full data block
 
     # Setup parameters
     curve: str  # e.g. P-256
     g: str  # base point   (hex string representation)
     h: str  # random point (hex string representation)
 
-    # Returns serialized commitments
-    commitments: typing.Optional[
-        str
-    ] = None  # base64 encoded string of serialized commitments dict
-    merkle_root: typing.Optional[str] = None  # the merkle root of the data
+    # Return signature of received data
+    randomness: typing.Optional[int] = None
+    commitment: typing.Optional[str] = None
+    signature: typing.Optional[bytes] = None
 
 
 class Challenge(bt.Synapse):
     # Receives
     challenge_hash: str  # hash of the data to challenge
     challenge_index: int  # block indices to challenge
-    # TODO: Validator must store (g,h,curve) setup params for each (miner,data) pair
+    chunk_size: int  # bytes (e.g. 1024) for how big the chunks should be
     g: str  # base point   (hex string representation)
     h: str  # random point (hex string representation)
     curve: str
@@ -60,18 +55,10 @@ class Challenge(bt.Synapse):
     # - random value (int)
     # - merkle proof (List[Dict[<left|right>, hex strings])
     # - merkle root (hex string)
-    # - new commitment (point represented as hex string)
-    # - new merkle root (hex string)
     commitment: typing.Optional[str] = None
     data_chunk: typing.Optional[bytes] = None
-    random_value: typing.Optional[int] = None
+    randomness: typing.Optional[int] = None
     merkle_proof: typing.Optional[
-        typing.List[typing.Dict[str, str]]
-    ] = None  # or b64 typing.Optional[str]
+        typing.Union[typing.List[typing.Dict[str, str]], str]
+    ] = None
     merkle_root: typing.Optional[str] = None
-    new_commitment: typing.Optional[
-        str
-    ] = None  # must return recommitment for next challenge
-    new_merkle_root: typing.Optional[
-        str
-    ] = None  # must return new merkle root for next challenge

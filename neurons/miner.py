@@ -51,6 +51,7 @@ from storage.utils import (
     decode_miner_storage,
     verify_challenge,
 )
+from storage.utils import *
 
 
 def get_config():
@@ -133,7 +134,9 @@ def commit_data(committer, data_chunks, n_chunks):
 
     # Commit each chunk of data
     randomness, chunks, points = [None] * n_chunks, [None] * n_chunks, [None] * n_chunks
+    print("n_chunks:", n_chunks)
     for index, chunk in enumerate(data_chunks):
+        print("index:", index)
         c, m_val, r = committer.commit(chunk)
         c_hex = ecc_point_to_hex(c)
         randomness[index] = r
@@ -287,43 +290,38 @@ def main(config):
                                             chunk size, curve information, and data hash for storage indexing.
 
         Returns:
-            storage.protocol.Store: The updated synapse object containing commitments and the Merkle root of the stored data.
+            storage.protocol.Store: The updated synapse object containing the commitment of the stored data.
 
         Raises:
             Any exception raised by the underlying storage, encoding, or cryptographic functions will be propagated.
         """
-        # Chunk the data according to the specified (random) chunk size
-        encrypted_data_bytes = base64.b64decode(synapse.encrypted_data)
-        data_chunks = chunk_data(encrypted_data_bytes, synapse.chunk_size)
-
-        # Extract setup params
-        g = hex_to_ecc_point(synapse.g, synapse.curve)
-        h = hex_to_ecc_point(synapse.h, synapse.curve)
-
-        # Commit the data chunks based on the provided curve points
-        committer = ECCommitment(g, h)
-        # commitments, merkle_tree = commit_data(committer, data_chunks)
-        randomness, chunks, points, merkle_tree = commit_data(
-            committer, data_chunks, synapse.n_chunks
-        )
-
-        # store (randomness values, merkle tree, commitments, data chunks)
+        # Store the data
         miner_store = {
-            "randomness": b64_encode(randomness),
-            "data_chunks": b64_encode(chunks),
-            "commitments": b64_encode(points),
-            "merkle_tree": b64_encode(merkle_tree.serialize()),
+            "g": synapse.g,
+            "h": synapse.h,
+            "curve": synapse.curve,
+            "data": synapse.encrypted_data,
         }
         dumped = json.dumps(miner_store).encode()
-        database.set(synapse.data_hash, dumped)
 
-        # Verify retrieval and decoding
-        encoded_storage = database.get(synapse.data_hash)
-        decoded_storage = decode_miner_storage(encoded_storage, synapse.curve)
+        # Commit to the entire data block
+        committer = ECCommitment(
+            hex_to_ecc_point(synapse.g, synapse.curve),
+            hex_to_ecc_point(synapse.h, synapse.curve),
+        )
+        encrypted_byte_data = base64.b64decode(synapse.encrypted_data)
+        c, m_val, r = committer.commit(encrypted_byte_data)
 
-        # Prepare return values to validator
-        synapse.commitments = miner_store["commitments"]
-        synapse.merkle_root = merkle_tree.get_merkle_root()
+        # Store the data with the hash as the key
+        database.set(m_val, dumped)
+
+        # Send back some proof that we stored the data
+        synapse.randomness = r
+        synapse.commitment = ecc_point_to_hex(c)
+        synapse.signature = wallet.hotkey.sign(
+            str(m_val)
+        )  # NOTE: Does this add anything of value?
+
         return synapse
 
     def challenge(synapse: storage.protocol.Challenge) -> storage.protocol.Challenge:
@@ -350,64 +348,81 @@ def main(config):
             The database update operation is a critical section of the code that ensures the miner's storage is up-to-date
             with the latest commitments, in case of concurrent challenge requests.
         """
-        # Retrieve commitments from local storage
+        # Retrieve the data itself from miner storage
         data = database.get(synapse.challenge_hash)
-        decoded_data = decode_miner_storage(data, syn.curve)
+        decoded = json.loads(data.decode("utf-8"))
 
-        # Select data to return based on challenge index
-        merkle_tree = copy.deepcopy(decoded_data["merkle_tree"])
-        synapse.commitment = ecc_point_to_hex(
-            decoded_data["commitments"][synapse.challenge_index]
-        )
-        synapse.random_value = decoded_data["randomness"][synapse.challenge_index]
-        synapse.merkle_root = decoded_data["merkle_tree"].get_merkle_root()
-        synapse.data_chunk = decoded_data["data_chunks"][synapse.challenge_index]
-        synapse.merkle_proof = decoded_data["merkle_tree"].get_proof(
-            synapse.challenge_index
-        )
+        # Chunk the data according to the specified (random) chunk size
+        encrypted_data_bytes = base64.b64decode(decoded["data"])
+        data_chunks = chunk_data(encrypted_data_bytes, synapse.chunk_size)
 
-        # Recommit to pieces we just opened (because we send random secret value)
-        committer = ECCommitment(
-            hex_to_ecc_point(synapse.g, synapse.curve),
-            hex_to_ecc_point(synapse.h, synapse.curve),
-        )
-        new_randomness, new_point, new_merkle_tree = recommit_data(
+        # Extract setup params
+        g = hex_to_ecc_point(synapse.g, synapse.curve)
+        h = hex_to_ecc_point(synapse.h, synapse.curve)
+
+        # Commit the data chunks based on the provided curve points
+        committer = ECCommitment(g, h)
+        randomness, chunks, commitments, merkle_tree = commit_data(
             committer,
-            synapse.challenge_index,
-            decoded_data["merkle_tree"],
-            synapse.data_chunk,
+            data_chunks,
+            sys.getsizeof(encrypted_data_bytes) // synapse.chunk_size + 1,
         )
-        synapse.new_commitment = new_point
-        synapse.new_merkle_root = new_merkle_tree.get_merkle_root()
 
-        # Update miner storage for next challenge
-        decoded_data["randomness"][synapse.challenge_index] = new_randomness
-        decoded_data["commitments"][synapse.challenge_index] = hex_to_ecc_point(
-            new_point, synapse.curve
+        # Prepare return values to validator
+        synapse.commitment = commitments[synapse.challenge_index]
+        synapse.data_chunk = chunks[synapse.challenge_index]
+        synapse.randomness = randomness[synapse.challenge_index]
+        synapse.merkle_proof = b64_encode(
+            merkle_tree.get_proof(synapse.challenge_index)
         )
-        decoded_data["merkle_tree"] = new_merkle_tree
-        database.set(synapse.challenge_hash, encode_miner_storage(**decoded_data))
-        print("database updated!")
+        synapse.merkle_root = merkle_tree.get_merkle_root()
+        return synapse
 
+    def GetSynapse(config):
+        # Setup CRS for this round of validation
+        g, h = setup_CRS(curve=config.curve)
+
+        # Make a random bytes file to test the miner
+        random_data = make_random_file(maxsize=config.maxsize)
+
+        # Random encryption key for now (never will decrypt)
+        key = get_random_bytes(32)  # 256-bit key
+
+        # Encrypt the data
+        encrypted_data, nonce, tag = encrypt_data(
+            random_data,
+            key,  # TODO: Use validator key as the encryption key?
+        )
+
+        # Convert to base64 for compactness
+        b64_encrypted_data = base64.b64encode(encrypted_data).decode("utf-8")
+
+        # Hash the encrypted data
+        data_hash = hash_data(encrypted_data)
+
+        syn = synapse = storage.protocol.Store(
+            data_hash=data_hash,
+            encrypted_data=b64_encrypted_data,
+            curve=config.curve,
+            g=ecc_point_to_hex(g),
+            h=ecc_point_to_hex(h),
+        )
         return synapse
 
     if False:  # (debugging)
         syn = GetSynapse(config)
         response = store(syn)
-
         cyn = storage.protocol.Challenge(
-            challenge_hash=syn.data_hash,
+            challenge_hash=hash_data(base64.b64decode(syn.encrypted_data)),
             challenge_index=0,
+            chunk_size=111,
             curve="P-256",
             g=syn.g,
             h=syn.h,
         )
         response = challenge(cyn)
-
         verified = verify_challenge(response)
-
         print(f"Is verified: {verified}")
-
         import pdb
 
         pdb.set_trace()
