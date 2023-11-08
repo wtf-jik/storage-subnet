@@ -39,6 +39,7 @@ from storage.utils import (
     chunk_data,
     MerkleTree,
     encrypt_data,
+    decrypt_aes_gcm,
     ECCommitment,
     make_random_file,
     get_random_chunksize,
@@ -46,13 +47,13 @@ from storage.utils import (
     hex_to_ecc_point,
     serialize_dict_with_bytes,
     deserialize_dict_with_bytes,
-    decode_storage,
+    verify_challenge_with_seed,
+    verify_store_with_seed,
 )
 
 
 # TODO:
 def Challenge(database):
-    database = redis.StrictRedis(host="localhost", port=6379, db=0)
     keys = database.keys("*")
     store_keys = [
         "abc.123",
@@ -129,81 +130,201 @@ def Challenge(database):
     # - (3) the data chunk signature to verify they also have the data (redundant with 1?)
 
 
-def StoreRandomData():
+# TODO: select a subset of miners to store given the redundancy factor N
+def select_subset_uids(uids: list, N: int):
+    return random.choices(uids, k=N)
+
+
+def store_file_data(directory, metagraph):
+    # TODO: write this to replace store_random_data
+    # it will not be random but use real data from the validator filesystem
+    # possibly textbooks, pdfs, audio files, pictures, etc. to mimick user data
+    pass
+
+
+def store_random_data(curve, maxsize, metagraph, redundacy=3, key=None):
     # Setup CRS for this round of validation
-    g, h = setup_CRS(curve=config.curve)
+    g, h = setup_CRS(curve=curve)
 
     # Make a random bytes file to test the miner
-    random_data = make_random_file(maxsize=config.maxsize)
+    random_data = make_random_file(maxsize=maxsize)
 
     # Random encryption key for now (never will decrypt)
-    key = get_random_bytes(32)  # 256-bit key
+    encryption_key = key or get_random_bytes(32)
 
     # Encrypt the data
     encrypted_data, nonce, tag = encrypt_data(
         random_data,
-        key,  # TODO: Use validator key as the encryption key?
+        encryption_key,
     )
 
     # Convert to base64 for compactness
     b64_encrypted_data = base64.b64encode(encrypted_data).decode("utf-8")
 
-    # Hash the encrypted data
-    data_hash = hash_data(encrypted_data)
-
-    # Chunk the data
-    chunk_size = get_random_chunksize()
-    # chunks = list(chunk_data(encrypted_data, chunksize))
-
-    syn = synapse = protocol.Store(
-        chunk_size=chunk_size,
+    synapse = protocol.Store(
         encrypted_data=b64_encrypted_data,
-        data_hash=data_hash,
-        curve=config.curve,
+        curve=curve,
         g=ecc_point_to_hex(g),
         h=ecc_point_to_hex(h),
-        size=sys.getsizeof(encrypted_data),
+        seed=get_random_bytes(32).hex(),  # 256-bit seed
     )
 
-    # TODO: select subset of miners to query (e.g. redunancy factor of N)
-    # Broadcast a query to all miners on the network.
-    responses = dendrite.query(
-        metagraph.axons,
-        synapse,
-        deserialize=True,
-    )
+    # Select subset of miners to query (e.g. redunancy factor of N)
+    uids = select_subset_uids(metagraph.uids, N=redundancy)
+    axons = [metagraph.axons[uid] for uid in uids]
+    retry_uids = [None]
 
-    # Log the results for monitoring purposes.
-    bt.logging.info(f"Received responses: {responses}")
+    while len(retry_uids):
+        if retry_uids == [None]:
+            # initial loop
+            retry_uids = []
 
-    # TODO: Store data params in GUNdb instead of Redis
-    setup_params = {"g": g, "h": h, "curve": config.curve}
-    setup_params_base64 = base64.b64encode(
-        serialize_dict_with_bytes([setup_params]).encode()
-    ).decode("utf-8")
+        # Broadcast the query to selected miners on the network.
+        responses = dendrite.query(
+            axons,
+            synapse,
+            deserialize=False,
+        )
 
-    for response in responses:
-        # TODO: come up with better key mapping (merkle root based?)
-        key = f"{response.data_hash}.{response.axon.hotkey}"  # or UUID?
-        # Package up the required data into a dict
-        response_storage = {
-            "commitments": response.commitments,
-            "merkle_root": response.merkle_root,
-            "params": setup_params_base64,
-        }
-        # encode the response_storage dict as base64
-        response_storage_encoded = base64.b64encode(
-            json.dumps(response_storage).encode()
-        ).decode("utf-8")
-        # Store in the database according to the data hash and the miner hotkey
-        database.set(key, response_storage_encoded)
+        # Log the results for monitoring purposes.
+        bt.logging.info(f"Received responses: {responses}")
+
+        # TEMP weights vector
+        weights = [1.0] * len(metagraph.uids)
+        for uid, response in enumerate(zip(uids, responses)):
+            # Verify the commitment
+            if not verify_challenge_with_seed(response):
+                # TODO: flag this miner for 0 weight (or negative rewards?)
+                weights[uid] = 0.0
+                retry_uids.append(uid)
+                continue
+            # Store the hash->hotkey->size mapping in DB
+            # TODO: update this to store by hotkey rather than pair so we can efficiently
+            # lookup which miners have what data and query them
+            # NOTE: this will become a problem when the size of the database grows too large
+            key = f"{hash_data(encrypted_data)}.{response.axon.hotkey}"
+            response_storage = {
+                "size": sys.getsizeof(encrypted_data),
+                "prev_seed": synapse.seed,
+                "commitment_hash": response.commitment_hash,  # contains the seed
+                # TODO: these will be private to the validator, not stored in decentralized GUN db
+                "encryption_key": encryption_key.hex(),
+                "encryption_nonce": nonce.hex(),
+                "encryption_tag": tag.hex(),
+            }
+            bt.logging.debug(f"Storing data {response_storage}")
+            # Store in the database according to the data hash and the miner hotkey
+            database.set(key, json.dumps(response_storage).encode())
+            bt.logging.debug(f"Stored data in database with key: {key}")
+
+        # Get a new set of UIDs to query for those left behind
+        if retry_uids != []:
+            uids = select_subset_uids(retry_uids, N=len(retry_uids))
+            axons = [metagraph.axons[uid] for uid in uids]
 
 
-def ChallengeAndUpdate():
+def challenge(metagraph):  #
     # TODO: come up with an algorithm for properly challenging miners and
     # ensure an even spread statistically of which miners are queried, and
     # which indices are queried (gaussian randomness?)
-    pass
+
+    # For each UID:
+    # - fetch which data they have (list of hashes)
+    # - randomly select a hash
+    # - randomly select a commitment/data_chunk index
+    # - send the challenge to the miner
+    hotkeys = metagraph.hotkeys
+    for hotkey in [None]:
+        # Fetch the list of data hashes this miner has
+        keys = database.keys(f"*.{hotkey}")
+        print(f"all keys for hotkey {hotkey}\n{keys}")
+
+        # Select a specific data hash to query
+        # key = random.choice(keys).decode("utf-8")
+        key = "36572423112117696224165833631177730849457409908727827954083586177537634882175.None"
+        print("key selected:", key)
+        data_hash = key.split(".")[0]
+        print("data_hash:", data_hash)
+
+        # Fetch the associated validator storage information (size, prev_seed, commitment_hash)
+        data = database.get(key)
+        print("data:", data)
+        data = json.loads(data.decode("utf-8"))
+
+        # Get random chunksize given total size
+        chunk_size = (
+            get_random_chunksize(data["size"]) // 4
+        )  # at least 4 chunks # TODO make this a hyperparam
+        print("chunksize:", chunksize)
+
+        # Calculate number of chunks
+        num_chunks = data["size"] // chunk_size
+
+        # Get setup params
+        g, h = setup_CRS()
+
+        # Pre-fill the challenge synapse with required data
+        synapse = protocol.Challenge(
+            challenge_hash=data_hash,
+            chunk_size=chunk_size,
+            g=ecc_point_to_hex(g),
+            h=ecc_point_to_hex(h),
+            seed=get_random_bytes(32).hex(),  # 256-bit random seed
+        )
+
+        # Grab the UID to query
+        uid = metagraph.hotkeys.index(hotkey)
+
+        # Send the challenge to the miner
+        response = dendrite.query(
+            [metagraph.axons[uid]],
+            synapse,
+            deserialize=True,
+        )
+
+        # Verify the response
+        verified = verify_challenge_with_seed(response)
+        print(f"Is verified: {verified}")
+
+
+def retrieve(dendrite, metagraph, data_hash):
+    # fetch which miners have the data
+    keys = database.keys(f"{data_hash}.*")
+    axons_to_query = []
+    for key in keys:
+        hotkey = key.split(".")[1]
+        uid = metagraph.hotkeys.index(hotkey)
+        axons_to_query.append(metagraph.axons[uid])
+        print("appending hotkey:", hotkey)
+
+        # TODO: potentially issue a challenge to the miners to fetch the data
+        # may be as simple as a query the commitment hash chain
+        # C1 = hash(C0 || hash(data || current_seed)) ?
+        # Check out scratch/XOR_scheme.py
+
+    # query all N (from redundancy factor) with M challenges (x% of the total data)
+    # TODO: see who returns the data fastest, and rank them highest
+    responses = await dendrite(
+        axons_to_query,
+        protocol.Retrieve(
+            data_hash=data_hash,
+        ),
+        deserialize=True,
+    )
+
+    for response in responses:
+        print("response:", response)
+        if hash_data(base64.b64decode(respnonse.data)) != data_hash:
+            print("data hash does not match!")
+            continue
+
+        # Decrypt the data using the validator stored encryption keys
+        response.data = decrypt_aes_gcm(
+            base64.b64decode(response.data),
+            bytes.fromhex(data["encryption_key"]),
+            bytes.fromhex(data["encryption_nonce"]),
+            bytes.fromhex(data["encryption_tag"]),
+        )
 
 
 # Step 2: Set up the configuration parser
@@ -231,6 +352,15 @@ def get_config():
         type=int,
         default=3,
         help="Number of miners to store each piece of data on.",
+    )
+    parser.add_argument(
+        "--databse_host", default="localhost", help="The host of the redis database."
+    )
+    parser.add_argument(
+        "--databse_port", default=6379, help="The port of the redis database."
+    )
+    parser.add_argument(
+        "--databse_index", default=0, help="The database number of the redis database."
     )
     # Adds override arguments for network and netuid.
     parser.add_argument("--netuid", type=int, default=1, help="The chain subnet uid.")
@@ -298,6 +428,11 @@ def main(config):
             f"\nYour validator: {wallet} if not registered to chain connection: {subtensor} \nRun btcli register and try again."
         )
         exit()
+
+    # Setup database
+    database = redis.StrictRedis(
+        host=config.database_host, port=config.database_port, db=config.database_index
+    )
 
     # Each validator gets a unique identity (UID) in the network for differentiation.
     my_subnet_uid = metagraph.hotkeys.index(wallet.hotkey.ss58_address)

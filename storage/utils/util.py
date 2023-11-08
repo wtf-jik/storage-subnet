@@ -1,3 +1,21 @@
+# The MIT License (MIT)
+# Copyright © 2023 Yuma Rao
+# Copyright © 2023 philanthrope
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+# documentation files (the “Software”), to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
+# and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+# The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+# the Software.
+
+# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+# THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
 import os
 import json
 import base64
@@ -123,6 +141,33 @@ def encrypt_data(filename, key):
     return cipher_text, cipher.nonce, tag
 
 
+def decrypt_aes_gcm(cipher_text, key, nonce, tag):
+    """
+    Decrypt the data using AES-GCM.
+
+    Parameters:
+    - cipher_text: bytes. The encrypted data.
+    - key: bytes. The secret key used for decryption.
+    - nonce: bytes. The nonce used in the GCM mode for encryption.
+    - tag: bytes. The tag for authentication.
+
+    Returns:
+    - data: bytes. The decrypted data.
+    """
+
+    # Initialize AES-GCM cipher with the given key and nonce
+    cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+
+    # Decrypt the data and verify the tag
+    try:
+        data = cipher.decrypt_and_verify(cipher_text, tag)
+    except ValueError:
+        # This is raised if the tag does not match
+        raise ValueError("Incorrect decryption key or corrupted data.")
+
+    return data
+
+
 def decode_storage(encoded_storage):
     """
     Decodes a base64-encoded string that represents storage data. This storage data is expected
@@ -201,66 +246,6 @@ def b64_decode(data, decode_hex=False, encrypted=False):
     return decoded_data
 
 
-def encode_miner_storage(**kwargs):
-    """
-    Encodes miner storage data, including randomness, data chunks, commitments, and the Merkle tree into a
-    base64-encoded JSON byte string.
-
-    Args:
-        **kwargs: Keyword arguments containing 'randomness', 'data_chunks', 'commitments', and 'merkle_tree'.
-
-    Returns:
-        bytes: The encoded byte string containing all the miner storage data.
-
-    Note:
-        This function expects the 'commitments' keyword argument to be a list of EccPoint objects, which will be
-        converted to hex strings before encoding.
-    """
-    randomness = kwargs.get("randomness")
-    chunks = kwargs.get("data_chunks")
-    points = kwargs.get("commitments")
-    points = [
-        ecc_point_to_hex(p)
-        for p in points
-        if isinstance(p, Crypto.PublicKey.ECC.EccPoint)
-    ]
-    merkle_tree = kwargs.get("merkle_tree")
-
-    # store (randomness values, merkle tree, commitments, data chunks)
-    miner_store = {
-        "randomness": b64_encode(randomness),
-        "data_chunks": b64_encode(chunks),
-        "commitments": b64_encode(points),
-        "merkle_tree": b64_encode(merkle_tree.serialize()),
-    }
-    return json.dumps(miner_store).encode()
-
-
-def decode_miner_storage(encoded_storage, curve):
-    """
-    Decodes miner storage data from a base64-encoded JSON byte string into its components.
-
-    Args:
-        encoded_storage (bytes): The encoded byte string of the miner storage data.
-        curve (Crypto.PublicKey.ECC.Curve): The elliptic curve used for ECC points.
-
-    Returns:
-        dict: A dictionary containing the decoded 'randomness', 'data_chunks', 'commitments', and 'merkle_tree'.
-
-    Note:
-        This function converts 'commitments' back from hex strings to EccPoint objects and deserializes the
-        'merkle_tree'.
-    """
-    xy = json.loads(encoded_storage.decode("utf-8"))
-    xz = {
-        k: b64_decode(v, decode_hex=True if k != "commitments" else False)
-        for k, v in xy.items()
-    }
-    xz["commitments"] = [hex_to_ecc_point(c, curve) for c in xz["commitments"]]
-    xz["merkle_tree"] = MerkleTree().deserialize(xz["merkle_tree"])
-    return xz
-
-
 def validate_merkle_proof(proof, target_hash, merkle_root):
     """
     Validates a Merkle proof by computing the hash path from the target hash to the expected Merkle root.
@@ -294,7 +279,7 @@ def validate_merkle_proof(proof, target_hash, merkle_root):
         return proof_hash == merkle_root
 
 
-def verify_challenge(synapse):
+def verify_challenge_with_seed(synapse):
     """
     Verifies the validity of a challenge response by opening the commitment and validating the Merkle proof.
 
@@ -317,7 +302,9 @@ def verify_challenge(synapse):
     commitment = hex_to_ecc_point(synapse.commitment, synapse.curve)
 
     if not committer.open(
-        commitment, hash_data(synapse.data_chunk), synapse.randomness
+        commitment,
+        hash_data(base64.b64decode(synapse.data_chunk) + str(synapse.seed).encode()),
+        synapse.randomness,
     ):
         print(f"Opening commitment failed")
         return False
@@ -328,6 +315,41 @@ def verify_challenge(synapse):
         synapse.merkle_root,
     ):
         print(f"Merkle proof validation failed")
+        return False
+
+    return True
+
+
+def verify_store_with_seed(synapse):
+    """
+    Verifies the validity of a challenge response by opening the commitment and validating the Merkle proof.
+
+    Args:
+        synapse: An object containing challenge data, including the commitment, the data chunk, the random value used
+                 in the commitment, the elliptic curve, and the Merkle proof.
+
+    Returns:
+        bool: True if both the commitment opens correctly and the Merkle proof is valid, False otherwise.
+
+    Raises:
+        Any exceptions raised by the underlying cryptographic functions are propagated.
+    """
+    # TODO: Add checks and defensive programming here to handle all types
+    # (bytes, str, hex, ecc point, etc)
+    committer = ECCommitment(
+        hex_to_ecc_point(synapse.g, synapse.curve),
+        hex_to_ecc_point(synapse.h, synapse.curve),
+    )
+    commitment = hex_to_ecc_point(synapse.commitment, synapse.curve)
+
+    if not committer.open(
+        commitment,
+        hash_data(
+            base64.b64decode(synapse.encrypted_data) + str(synapse.seed).encode()
+        ),
+        synapse.randomness,
+    ):
+        print(f"Opening commitment failed")
         return False
 
     return True

@@ -35,20 +35,31 @@ class Store(bt.Synapse):
     g: str  # base point   (hex string representation)
     h: str  # random point (hex string representation)
 
+    seed: typing.Union[
+        str, int, bytes
+    ]  # random seed (bytes stored as hex) for the commitment
+
     # Return signature of received data
     randomness: typing.Optional[int] = None
     commitment: typing.Optional[str] = None
     signature: typing.Optional[bytes] = None
+    commitment_hash: typing.Optional[str] = None  # includes seed
 
 
 class Challenge(bt.Synapse):
-    # Receives
+    # TODO: write deserialize
+
+    # Query parameters
     challenge_hash: str  # hash of the data to challenge
     challenge_index: int  # block indices to challenge
     chunk_size: int  # bytes (e.g. 1024) for how big the chunks should be
+
+    # Setup parameters
     g: str  # base point   (hex string representation)
     h: str  # random point (hex string representation)
     curve: str
+    seed: typing.Union[str, int]  # random seed for the commitment
+
     # Returns
     # - commitment (point represented as hex string)
     # - data chunk (base64 encoded string of bytes)
@@ -62,3 +73,11 @@ class Challenge(bt.Synapse):
         typing.Union[typing.List[typing.Dict[str, str]], str]
     ] = None
     merkle_root: typing.Optional[str] = None
+
+
+class Retrieve(bt.Synapse):
+    # Where to find the data
+    data_hash: str
+
+    # Fetched data
+    data: typing.Optional[str] = None
