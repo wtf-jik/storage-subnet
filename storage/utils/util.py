@@ -246,6 +246,12 @@ def b64_decode(data, decode_hex=False, encrypted=False):
     return decoded_data
 
 
+def xor_data_and_seed(data, seed):
+    """XOR the data and the seed, extending the seed if necessary."""
+    seed = (seed * (len(data) // len(seed))) + seed[: len(data) % len(seed)]
+    return bytes(a ^ b for a, b in zip(data, seed))
+
+
 def validate_merkle_proof(proof, target_hash, merkle_root):
     """
     Validates a Merkle proof by computing the hash path from the target hash to the expected Merkle root.
@@ -279,20 +285,34 @@ def validate_merkle_proof(proof, target_hash, merkle_root):
         return proof_hash == merkle_root
 
 
-def verify_challenge_with_seed(synapse):
-    """
-    Verifies the validity of a challenge response by opening the commitment and validating the Merkle proof.
+def verify_chained_commitment(proof, seed, commitment, verbose=False):
+    """Verify a commitment using the proof, seed, and commitment."""
+    expected_commitment = str(hash_data(proof.encode() + seed.encode()))
+    if verbose:
+        print(
+            "types: ",
+            "proof",
+            type(proof),
+            "seed",
+            type(seed),
+            "commitment",
+            type(commitment),
+        )
+        print("recieved proof     : ", proof)
+        print("recieved seed      : ", seed)
+        print("recieved commitment: ", commitment)
+        print("excpected commitment:", expected_commitment)
+        print("type expected commit:", type(expected_commitment))
+    return expected_commitment == commitment
 
-    Args:
-        synapse: An object containing challenge data, including the commitment, the data chunk, the random value used
-                 in the commitment, the elliptic curve, and the Merkle proof.
 
-    Returns:
-        bool: True if both the commitment opens correctly and the Merkle proof is valid, False otherwise.
+def verify_challenge_with_seed(synapse, verbose=False):
+    if not verify_chained_commitment(
+        synapse.commitment_proof, synapse.seed, synapse.commitment_hash, verbose=verbose
+    ):
+        print(f"Initial commitment hash does not match expected result.")
+        return False
 
-    Raises:
-        Any exceptions raised by the underlying cryptographic functions are propagated.
-    """
     # TODO: Add checks and defensive programming here to handle all types
     # (bytes, str, hex, ecc point, etc)
     committer = ECCommitment(
@@ -321,21 +341,18 @@ def verify_challenge_with_seed(synapse):
 
 
 def verify_store_with_seed(synapse):
-    """
-    Verifies the validity of a challenge response by opening the commitment and validating the Merkle proof.
-
-    Args:
-        synapse: An object containing challenge data, including the commitment, the data chunk, the random value used
-                 in the commitment, the elliptic curve, and the Merkle proof.
-
-    Returns:
-        bool: True if both the commitment opens correctly and the Merkle proof is valid, False otherwise.
-
-    Raises:
-        Any exceptions raised by the underlying cryptographic functions are propagated.
-    """
     # TODO: Add checks and defensive programming here to handle all types
     # (bytes, str, hex, ecc point, etc)
+    decoded_data = base64.b64decode(synapse.encrypted_data)
+    seed_value = str(synapse.seed).encode()
+    reconstructed_hash = hash_data(decoded_data + seed_value)
+
+    # TODO: make these types the same:
+    # e.g. send synapse.commitment_hash as an int for consistency
+    if synapse.commitment_hash != str(reconstructed_hash):
+        print(f"Initial commitment hash does not match hash(data + seed)")
+        return False
+
     committer = ECCommitment(
         hex_to_ecc_point(synapse.g, synapse.curve),
         hex_to_ecc_point(synapse.h, synapse.curve),
@@ -344,12 +361,20 @@ def verify_store_with_seed(synapse):
 
     if not committer.open(
         commitment,
-        hash_data(
-            base64.b64decode(synapse.encrypted_data) + str(synapse.seed).encode()
-        ),
+        hash_data(decoded_data + str(synapse.seed).encode()),
         synapse.randomness,
     ):
         print(f"Opening commitment failed")
+        return False
+
+    return True
+
+
+def verify_retrieve_with_seed(synapse, verbose=False):
+    if not verify_chained_commitment(
+        synapse.commitment_proof, synapse.seed, synapse.commitment_hash, verbose=verbose
+    ):
+        print(f"Initial commitment hash does not match expected result.")
         return False
 
     return True

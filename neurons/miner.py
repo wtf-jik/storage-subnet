@@ -47,8 +47,9 @@ from storage.utils import (
     hex_to_ecc_point,
     b64_encode,
     b64_decode,
+    verify_store_with_seed,
     verify_challenge_with_seed,
-    xor_bytes,
+    verify_retrieve_with_seed,
 )
 
 
@@ -106,29 +107,6 @@ def get_config():
 
 
 def commit_data_with_seed(committer, data_chunks, n_chunks, seed):
-    """
-    Commits a list of data chunks to a new Merkle tree and generates the associated randomness and ECC points.
-
-    This function takes a 'committer' object which should have a 'commit' method, a list of 'data_chunks', and
-    an integer 'n_chunks' specifying the number of chunks to commit. It commits each chunk of data to the Merkle tree,
-    collecting the ECC points and randomness values for each commitment, and then constructs the Merkle tree from
-    all committed chunks.
-
-    Args:
-        committer: An object that has a 'commit' method for committing data chunks.
-        data_chunks (list): A list of data chunks to be committed.
-        n_chunks (int): The number of data chunks expected to be committed.
-
-    Returns:
-        tuple: A tuple containing four elements:
-            - randomness (list): A list of randomness values for each committed chunk.
-            - chunks (list): The original list of data chunks that were committed.
-            - points (list): A list of hex strings representing the ECC points for each commitment.
-            - merkle_tree (MerkleTree): A Merkle tree object that contains the commitments as leaves.
-
-    Raises:
-        ValueError: If the length of data_chunks is not equal to n_chunks.
-    """
     merkle_tree = MerkleTree()
 
     # Commit each chunk of data
@@ -218,31 +196,20 @@ def main(config):
         total_size = sum([database.memory_usage(key) for key in filtered_keys])
         return total_size
 
+    def compute_subsequent_commitment(data, previous_seed, new_seed, verbose=False):
+        """Compute a subsequent commitment based on the original data, previous seed, and new seed."""
+        if verbose:
+            print("IN COMPUTE SUBESEQUENT COMMITMENT")
+            print("type of data     :", type(data))
+            print("type of prev_seed:", type(previous_seed))
+            print("type of new_seed :", type(new_seed))
+        proof = hash_data(data + previous_seed)
+        return hash_data(str(proof).encode("utf-8") + new_seed), proof
+
     # This is the core miner function, which decides the miner's response to a valid, high-priority request.
     def store(synapse: storage.protocol.Store) -> storage.protocol.Store:
-        """
-        Stores encrypted data chunks along with their commitments and the associated Merkle tree in the database.
-
-        This function decodes the encrypted data provided in the synapse object, chunks it, and creates cryptographic
-        commitments for each chunk using elliptic curve cryptography. The commitments and randomness values are stored
-        along with a serialized Merkle tree. Finally, it verifies that the storage can be correctly retrieved and decoded,
-        preparing the synapse object with necessary return values for the validator.
-
-        Args:
-            synapse (storage.protocol.Store): An object containing storage request parameters, including encrypted data,
-                                            chunk size, curve information, and data hash for storage indexing.
-
-        Returns:
-            storage.protocol.Store: The updated synapse object containing the commitment of the stored data.
-
-        Raises:
-            Any exception raised by the underlying storage, encoding, or cryptographic functions will be propagated.
-        """
-        # Store the data
-        miner_store = {
-            "data": synapse.encrypted_data,
-            "prev_seed": str(synapse.seed),
-        }
+        # Decode the data from base64 to raw bytes
+        encrypted_byte_data = base64.b64decode(synapse.encrypted_data)
 
         # Commit to the entire data block
         committer = ECCommitment(
@@ -250,7 +217,6 @@ def main(config):
             hex_to_ecc_point(synapse.h, synapse.curve),
         )
         bt.logging.debug(f"committer: {committer}")
-        encrypted_byte_data = base64.b64decode(synapse.encrypted_data)
         bt.logging.debug(f"encrypted_byte_data: {encrypted_byte_data}")
         c, m_val, r = committer.commit(encrypted_byte_data + str(synapse.seed).encode())
         bt.logging.debug(f"c: {c}")
@@ -258,7 +224,11 @@ def main(config):
         bt.logging.debug(f"r: {r}")
 
         # Store the data with the hash as the key
-        miner_store["size"] = sys.getsizeof(encrypted_byte_data)
+        miner_store = {
+            "data": synapse.encrypted_data,
+            "prev_seed": str(synapse.seed),
+            "size": sys.getsizeof(encrypted_byte_data),
+        }
 
         dumped = json.dumps(miner_store).encode()
         bt.logging.debug(f"dumped: {dumped}")
@@ -275,35 +245,17 @@ def main(config):
         synapse.signature = wallet.hotkey.sign(str(m_val)).hex()
         bt.logging.debug(f"signed m_val: {synapse.signature}")
 
-        # or equivalently hash_data(encrypted_byte_data + str(synapse.seed).encode())
+        # CONCAT METHOD INITIAlIZE CHAIN
+        print(f"type(seed): {type(synapse.seed)}")
         synapse.commitment_hash = str(m_val)
+        bt.logging.debug(f"initial commitment_hash: {synapse.commitment_hash}")
+
         bt.logging.debug(f"returning synapse: {synapse}")
         return synapse
 
-    def challenge(synapse: storage.protocol.Challenge) -> storage.protocol.Challenge:
-        """
-        Responds to a challenge by providing a specific data chunk, its randomness, and a Merkle proof from the storage.
-
-        When challenged, this function retrieves the stored commitments, selects the specified data chunk and its
-        corresponding randomness value and Merkle proof based on the challenge index. It also re-commits to the data chunk,
-        updates the miner storage with the new commitment and Merkle tree, and returns the challenge object with the
-        necessary data for verification.
-
-        Args:
-            synapse (storage.protocol.Challenge): An object containing challenge parameters, including the challenge index,
-                                                curve information, and the challenge hash for retrieving the stored data.
-
-        Returns:
-            storage.protocol.Challenge: The updated synapse object containing the requested chunk, its randomness value,
-                                        the corresponding Merkle proof, and the updated commitment and Merkle root.
-
-        Raises:
-            Any exception raised by the underlying storage, encoding, or cryptographic functions will be propagated.
-
-        Notes:
-            The database update operation is a critical section of the code that ensures the miner's storage is up-to-date
-            with the latest commitments, in case of concurrent challenge requests.
-        """
+    def challenge(
+        synapse: storage.protocol.Challenge, verbose=False
+    ) -> storage.protocol.Challenge:
         # Retrieve the data itself from miner storage
         bt.logging.debug(f"challenge hash: {synapse.challenge_hash}")
         data = database.get(synapse.challenge_hash)
@@ -318,6 +270,30 @@ def main(config):
         # Chunk the data according to the specified (random) chunk size
         encrypted_data_bytes = base64.b64decode(decoded["data"])
         bt.logging.debug(f"encrypted_data_bytes: {encrypted_data_bytes}")
+
+        # Construct the next commitment hash using previous commitment and hash
+        # of the data to prove storage over time
+        prev_seed = decoded["prev_seed"].encode()
+        new_seed = synapse.seed.encode()
+        next_commitment, proof = compute_subsequent_commitment(
+            encrypted_data_bytes, prev_seed, new_seed
+        )
+        if verbose:
+            print(
+                f"types: prev_seed {str(type(prev_seed))}, new_seed {str(type(new_seed))}, proof {str(type(proof))}"
+            )
+            print(f"prev seed : {prev_seed}")
+            print(f"new seed  : {new_seed}")
+            print(f"proof     : {proof}")
+            print(f"commitment: {next_commitment}\n")
+        synapse.commitment_hash = next_commitment
+        synapse.commitment_proof = proof
+
+        # TODO: update the commitment seed challenge hash in storage
+        # - previous seed (S-1)
+        decoded["prev_seed"] = new_seed.decode("utf-8")
+        database.set(synapse.challenge_hash, json.dumps(decoded).encode())
+        bt.logging.debug(f"udpated miner storage: {decoded}")
 
         data_chunks = chunk_data(encrypted_data_bytes, synapse.chunk_size)
         bt.logging.debug(f"data_chunks: {data_chunks}")
@@ -336,12 +312,6 @@ def main(config):
         )
         bt.logging.debug(f"merkle_tree: {merkle_tree}")
 
-        # TODO: update the commitment seed challenge hash
-        # Needs:
-        # - previous seed (S-1)
-        # - current seed  (S)
-        # - previous commitment hash (C-1)
-
         # Prepare return values to validator
         synapse.commitment = commitments[synapse.challenge_index]
         bt.logging.debug(f"commitment: {synapse.commitment}")
@@ -358,36 +328,28 @@ def main(config):
         return synapse
 
     def retrieve(synapse: storage.protocol.Retrieve) -> storage.protocol.Retrieve:
-        """
-        Retrieves and decodes data associated with a given data hash from the miner database.
-
-        The function expects a 'Retrieve' object from the 'storage.protocol' which contains
-        a 'data_hash' attribute. It uses this hash to fetch the corresponding data from a
-        database (which is a byte string). It then decodes the byte string into a JSON object.
-
-        Note that the 'data' attribute of the 'Retrieve' object is updated with the base64-encoded
-        data from the decoded JSON, without decoding it into a binary format. The modified 'Retrieve'
-        object is then returned.
-
-        Args:
-            synapse (storage.protocol.Retrieve): An object that includes 'data_hash' used to
-                retrieve data from the database.
-
-        Returns:
-            storage.protocol.Retrieve: The input 'Retrieve' object with the 'data' attribute
-                updated to include the retrieved base64-encoded data.
-
-        Raises:
-            json.JSONDecodeError: If decoding the byte string to JSON fails.
-            KeyError: If the key 'data' is not found in the decoded JSON object.
-            Exception: If the retrieval from the database fails or other unspecified errors occur.
-        """
         # Fetch the data from the miner database
         data = database.get(synapse.data_hash)
         bt.logging.debug("retireved data:", data)
+
         # Decode the data + metadata from bytes to json
         decoded = json.loads(data.decode("utf-8"))
         bt.logging.debug("retrieve decoded data:", decoded)
+
+        # incorporate a final seed challenge to verify they still have the data at retrieval time
+        commitment, proof = compute_subsequent_commitment(
+            base64.b64decode(decoded["data"]),
+            decoded["prev_seed"].encode(),
+            synapse.seed.encode(),
+        )
+        synapse.commitment_hash = commitment
+        synapse.commitment_proof = proof
+
+        # TODO: restore new seed
+        decoded["prev_seed"] = synapse.seed
+        database.set(synapse.data_hash, json.dumps(decoded).encode())
+        bt.logging.debug(f"udpated retrieve miner storage: {decoded}")
+
         # Return base64 data (no need to decode here)
         synapse.data = decoded["data"]
         return synapse
@@ -403,12 +365,12 @@ def main(config):
         bt.logging.debug("\nresponse store:")
         bt.logging.debug(response_store.dict())
         verified = verify_store_with_seed(response_store)
-        bt.logging.debug("\nStore verified: ", verified)
+        bt.logging.debug(f"\nStore verified: {verified}")
 
         encrypted_byte_data = base64.b64decode(syn.encrypted_data)
         response_store.axon.hotkey = wallet.hotkey.ss58_address
         lookup_key = f"{hash_data(encrypted_byte_data)}.{response_store.axon.hotkey}"
-        bt.logging.debug("lookup key:", lookup_key)
+        bt.logging.debug(f"lookup key: {lookup_key}")
         validator_store = {
             "seed": response_store.seed,
             "size": sys.getsizeof(encrypted_byte_data),
@@ -424,7 +386,7 @@ def main(config):
         bt.logging.debug("\nretrv decoded:", json.loads(retrv.decode("utf-8")))
 
         bt.logging.debug("\n\nchallenge phase------------------------".upper())
-        bt.logging.debug("key selected:", lookup_key)
+        bt.logging.debug(f"key selected: {lookup_key}")
         data_hash = lookup_key.split(".")[0]
         bt.logging.debug("data_hash:", data_hash)
         data = database.get(lookup_key)
@@ -449,7 +411,7 @@ def main(config):
             h=ecc_point_to_hex(h),
             curve=config.curve,
             challenge_index=random.choice(range(num_chunks)),
-            seed=data["seed"],
+            seed=get_random_bytes(32).hex(),  # data["seed"], # should be a NEW seed
         )
         bt.logging.debug("\nChallenge synapse:", syn)
         response_challenge = challenge(syn)
@@ -458,10 +420,35 @@ def main(config):
         verified = verify_challenge_with_seed(response_challenge)
         bt.logging.debug(f"Is verified: {verified}")
 
+        # Challenge a 2nd time to verify the chain of proofs
+        bt.logging.debug("\n\n2nd challenge phase------------------------".upper())
+        g, h = setup_CRS()
+        syn = storage.protocol.Challenge(
+            challenge_hash=data_hash,
+            chunk_size=chunk_size,
+            g=ecc_point_to_hex(g),
+            h=ecc_point_to_hex(h),
+            curve=config.curve,
+            challenge_index=random.choice(range(num_chunks)),
+            seed=get_random_bytes(32).hex(),  # data["seed"], # should be a NEW seed
+        )
+        bt.logging.debug("\nChallenge 2 synapse:", syn)
+        response_challenge = challenge(syn)
+        bt.logging.debug("\nchallenge 2 response:")
+        bt.logging.debug(response_challenge.dict())
+        verified = verify_challenge_with_seed(response_challenge)
+        bt.logging.debug(f"Is verified 2: {verified}")
+
         bt.logging.debug("\n\nretrieve phase------------------------".upper())
-        ryn = storage.protocol.Retrieve(data_hash=data_hash)
+        ryn = storage.protocol.Retrieve(
+            data_hash=data_hash, seed=get_random_bytes(32).hex()
+        )
         bt.logging.debug("receive synapse:", ryn)
         rdata = retrieve(ryn)
+
+        verified = verify_retrieve_with_seed(rdata)
+        bt.logging.debug(f"Retreive is verified: {verified}")
+
         bt.logging.debug("retrieved data:", rdata)
         decoded = base64.b64decode(rdata.data)
         bt.logging.debug("decoded base64 data:", decoded)
