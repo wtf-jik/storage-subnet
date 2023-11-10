@@ -87,6 +87,11 @@ def get_config():
         default=0,
         help="The index of the redis database.",
     )
+    parser.add_argument(
+        "--data_directory",
+        default="~/.data",
+        help="The directory to store data in.",
+    )
     bt.subtensor.add_args(parser)
     bt.logging.add_args(parser)
     bt.wallet.add_args(parser)
@@ -104,6 +109,10 @@ def get_config():
     if not os.path.exists(config.full_path):
         os.makedirs(config.full_path, exist_ok=True)
     return config
+
+
+def safe_key_search(database, pattern):
+    return [key for key in database.scan_iter(pattern)]
 
 
 def commit_data_with_seed(committer, data_chunks, n_chunks, seed):
@@ -184,16 +193,34 @@ def main(config):
         )
         return prirority
 
+    def save_data_to_filesystem(data, directory, filename):
+        # Ensure the directory exists
+        os.makedirs(directory, exist_ok=True)
+        file_path = os.path.join(os.path.expanduser(directory), filename)
+        with open(file_path, "wb") as file:
+            file.write(data)
+        return file_path
+
+    def load_from_filesystem(filepath):
+        with open(os.path.expanduser(filepath), "rb") as file:
+            data = file.read()
+        return data
+
     def total_storage(database):
         # Fetch all keys from Redis
-        all_keys = database.keys("*")
+        all_keys = safe_key_search(database, "*")
 
-        # Filter out keys that contain a period
+        # Filter out keys that contain a period (temporary, remove later)
         filtered_keys = [key for key in all_keys if b"." not in key]
         bt.logging.debug("filtered_keys:", filtered_keys)
 
-        # Get the size of each key and sum them up
-        total_size = sum([database.memory_usage(key) for key in filtered_keys])
+        # Get the size of each data object and sum them up
+        total_size = sum(
+            [
+                json.loads(database.get(key).decode("utf-8")).get("size", 0)
+                for key in filtered_keys
+            ]
+        )
         return total_size
 
     def compute_subsequent_commitment(data, previous_seed, new_seed, verbose=False):
@@ -223,17 +250,22 @@ def main(config):
         bt.logging.debug(f"m_val: {m_val}")
         bt.logging.debug(f"r: {r}")
 
-        # Store the data with the hash as the key
+        # Store the data with the hash as the key in the filesystem
+        data_hash = hash_data(encrypted_byte_data)
+        bt.logging.debug(f"data_hash: {data_hash}")
+        filepath = save_data_to_filesystem(
+            encrypted_byte_data, config.data_directory, str(data_hash)
+        )
+        bt.logging.debug(f"stored data in filepath: {filepath}")
         miner_store = {
-            "data": synapse.encrypted_data,
+            "filepath": filepath,
             "prev_seed": str(synapse.seed),
             "size": sys.getsizeof(encrypted_byte_data),
         }
 
+        # Dump the metadata to json and store in redis
         dumped = json.dumps(miner_store).encode()
         bt.logging.debug(f"dumped: {dumped}")
-        data_hash = hash_data(encrypted_byte_data)
-        bt.logging.debug(f"data_hash: {data_hash}")
         database.set(data_hash, dumped)
         bt.logging.debug(f"set in database!")
 
@@ -243,7 +275,7 @@ def main(config):
 
         # NOTE: Does this add anything of value?
         synapse.signature = wallet.hotkey.sign(str(m_val)).hex()
-        bt.logging.debug(f"signed m_val: {synapse.signature}")
+        bt.logging.debug(f"signed m_val: {synapse.signature.hex()}")
 
         # CONCAT METHOD INITIAlIZE CHAIN
         print(f"type(seed): {type(synapse.seed)}")
@@ -268,7 +300,8 @@ def main(config):
         bt.logging.debug(f"decoded data: {decoded}")
 
         # Chunk the data according to the specified (random) chunk size
-        encrypted_data_bytes = base64.b64decode(decoded["data"])
+        filepath = decoded["filepath"]
+        encrypted_data_bytes = load_from_filesystem(filepath)
         bt.logging.debug(f"encrypted_data_bytes: {encrypted_data_bytes}")
 
         # Construct the next commitment hash using previous commitment and hash
@@ -296,7 +329,7 @@ def main(config):
         bt.logging.debug(f"udpated miner storage: {decoded}")
 
         data_chunks = chunk_data(encrypted_data_bytes, synapse.chunk_size)
-        bt.logging.debug(f"data_chunks: {data_chunks}")
+        bt.logging.debug(f"data_chunks: {pformat(data_chunks)}")
 
         # Extract setup params
         g = hex_to_ecc_point(synapse.g, synapse.curve)
@@ -336,22 +369,26 @@ def main(config):
         decoded = json.loads(data.decode("utf-8"))
         bt.logging.debug("retrieve decoded data:", decoded)
 
+        # load the data from the filesystem
+        filepath = decoded["filepath"]
+        encrypted_data_bytes = load_from_filesystem(filepath)
+
         # incorporate a final seed challenge to verify they still have the data at retrieval time
         commitment, proof = compute_subsequent_commitment(
-            base64.b64decode(decoded["data"]),
+            encrypted_data_bytes,
             decoded["prev_seed"].encode(),
             synapse.seed.encode(),
         )
         synapse.commitment_hash = commitment
         synapse.commitment_proof = proof
 
-        # TODO: restore new seed
+        # store new seed
         decoded["prev_seed"] = synapse.seed
         database.set(synapse.data_hash, json.dumps(decoded).encode())
         bt.logging.debug(f"udpated retrieve miner storage: {decoded}")
 
-        # Return base64 data (no need to decode here)
-        synapse.data = decoded["data"]
+        # Return base64 data
+        synapse.data = base64.b64encode(encrypted_data_bytes)
         return synapse
 
     def test(config):
@@ -361,11 +398,12 @@ def main(config):
         )
         bt.logging.debug("\nsynapse:", syn)
         response_store = store(syn)
-        # TODO: Verify the initial store
+
+        # Verify the initial store
         bt.logging.debug("\nresponse store:")
         bt.logging.debug(response_store.dict())
         verified = verify_store_with_seed(response_store)
-        bt.logging.debug(f"\nStore verified: {verified}")
+        bt.logging.debug(f"Store verified: {verified}")
 
         encrypted_byte_data = base64.b64decode(syn.encrypted_data)
         response_store.axon.hotkey = wallet.hotkey.ss58_address
@@ -391,17 +429,21 @@ def main(config):
         bt.logging.debug("data_hash:", data_hash)
         data = database.get(lookup_key)
         bt.logging.debug("data:", data)
-        bt.logging.debug("data size:", sys.getsizeof(data))
         data = json.loads(data.decode("utf-8"))
+        bt.logging.debug(f"data size: {data['size']}")
+
         # Get random chunksize given total size
         chunk_size = (
             get_random_chunksize(data["size"]) // 4
         )  # at least 4 chunks # TODO make this a hyperparam
+
         if chunk_size == 0:
             chunk_size = 10  # safe default
         bt.logging.debug("chunksize:", chunk_size)
+
         # Calculate number of chunks
         num_chunks = data["size"] // chunk_size
+
         # Get setup params
         g, h = setup_CRS()
         syn = storage.protocol.Challenge(

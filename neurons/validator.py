@@ -52,82 +52,11 @@ from storage.utils import (
 )
 
 
-# TODO:
-def Challenge(database):
-    keys = database.keys("*")
-    store_keys = [
-        "abc.123",
-        "def.123",
-        "def.456",
-        "hig.456",
-        "lmn.456",
-    ]
+"""This cursor-based method uses SCAN under the hood and is non-blocking"""
 
-    key_by_miner = {}
-    for key in keys:
-        data_hash, hotkey = key.split(".")
-        if hotkey not in key_by_miner:
-            key_by_miner[hotkey] = []
-        key_by_miner[hotkey].append(data_hash)
 
-    # subtensor = bt.subtensor(network="test")
-    # metagraph = subtensor.metagraph(8)
-    # hotkeys = metagraph.hotkeys
-    hotkeys = [
-        None,
-    ]  # "123", "456"]
-    for hotkey in hotkeys:
-        # Randomly select a storage_key from the database for this miner
-        keys = key_by_miner[hotkey]
-        hash = "103804754514487657733834309377505898919271919633571683238396104733193613812627"  # random_choice(keys)
-        data = database.get(f"{hash}.{hotkey}")
-
-        # Decode the storage data and create a challenge
-        data = decode_storage(data)
-        params = data["params"]
-        merkle_root = data["merkle_root"]
-        commitments = data["commitments"]
-
-        # Choose a random commitment to challenge
-        index = random_choice(range(len(commitments)))
-        commitment = commitments[index]
-
-        # Create the challenge
-        synapse = protocol.Challenge(
-            challenge_hash="91698717955530315133405947771692390048583575882025109729287710097208243039173",
-            challenge_index=index,
-        )
-        # We want to get back from the miner:
-        # - the data chunk itself (to prove they still have it)
-        # - the random value to open the commitment
-        # - the merkle proof for the data chunk
-
-    # For each UID:
-    # - fetch which data they have (list of hashes)
-    # - randomly select a hash
-    # - fetch the commitments for that hash
-    # - randomly select a commitment/data_chunk
-    # - send the challenge to the miner
-
-    syn = protocol.Challenge(
-        challenge_hash=key_.split(".")[0],
-        commitment=commitment,
-        merkle_root=merkle_root,
-        params=params,
-        index=index,
-    )
-    # We want to get back from the miner:
-    # - the data chunk itself (to prove they still have it)
-    # - the random value to open the commitment
-    # - the merkle proof for the data chunk
-
-    # TODO: maybe we additionally want a random challenge here on the original data?
-    # Perhaps verify they signed the data chunk with their wallet? (e.g. dendrite signature and axon verify?)
-    # Or a (data_chunk + <random_value|miner_key>) signature?
-    # This way we have 3 layers of security:
-    # - (1) the commitment + random value + original data to prove they have the data now
-    # - (2) the merkle proof to prove they stored it originally
-    # - (3) the data chunk signature to verify they also have the data (redundant with 1?)
+def safe_key_search(database, pattern):
+    return [key for key in database.scan_iter(pattern)]
 
 
 # TODO: select a subset of miners to store given the redundancy factor N
@@ -135,9 +64,9 @@ def select_subset_uids(uids: list, N: int):
     return random.choices(uids, k=N)
 
 
-def store_file_data(directory, metagraph):
-    # TODO: write this to replace store_random_data
-    # it will not be random but use real data from the validator filesystem
+def store_file_data(metagraph, directory=None, file_bytes=None):
+    # TODO: write this to be a mirror of store_random_data
+    # it will not be random but use real data from the validator filesystem or client data
     # possibly textbooks, pdfs, audio files, pictures, etc. to mimick user data
     pass
 
@@ -180,6 +109,7 @@ def store_random_data(curve, maxsize, metagraph, redundacy=3, key=None):
             retry_uids = []
 
         # Broadcast the query to selected miners on the network.
+        # TODO: make this asynchronous and use await dendrite() instead
         responses = dendrite.query(
             axons,
             synapse,
@@ -202,12 +132,13 @@ def store_random_data(curve, maxsize, metagraph, redundacy=3, key=None):
             # TODO: update this to store by hotkey rather than pair so we can efficiently
             # lookup which miners have what data and query them
             # NOTE: this will become a problem when the size of the database grows too large
-            key = f"{hash_data(encrypted_data)}.{response.axon.hotkey}"
+            data_hash = hash_data(encrypted_data)
+            key = f"{data_hash}.{response.axon.hotkey}"
             response_storage = {
-                "size": sys.getsizeof(encrypted_data),
                 "prev_seed": synapse.seed,
+                "size": sys.getsizeof(encrypted_data),
                 "commitment_hash": response.commitment_hash,  # contains the seed
-                # TODO: these will be private to the validator, not stored in decentralized GUN db
+                # TODO: these will be private to the validator, not stored in decentralized db
                 "encryption_key": encryption_key.hex(),
                 "encryption_nonce": nonce.hex(),
                 "encryption_tag": tag.hex(),
@@ -223,7 +154,7 @@ def store_random_data(curve, maxsize, metagraph, redundacy=3, key=None):
             axons = [metagraph.axons[uid] for uid in uids]
 
 
-def challenge(metagraph):  #
+def challenge(metagraph, chunk_factor=4):  #
     # TODO: come up with an algorithm for properly challenging miners and
     # ensure an even spread statistically of which miners are queried, and
     # which indices are queried (gaussian randomness?)
@@ -234,28 +165,28 @@ def challenge(metagraph):  #
     # - randomly select a commitment/data_chunk index
     # - send the challenge to the miner
     hotkeys = metagraph.hotkeys
-    for hotkey in [None]:
+    for hotkey in [
+        "5C86aJ2uQawR6P6veaJQXNK9HaWh6NMbUhTiLs65kq4ZW3NH"
+    ]:  # metegraph.hotkeys
         # Fetch the list of data hashes this miner has
-        keys = database.keys(f"*.{hotkey}")
+        keys = safe_key_search(database, f"*.{hotkey}")
         print(f"all keys for hotkey {hotkey}\n{keys}")
 
         # Select a specific data hash to query
         # key = random.choice(keys).decode("utf-8")
-        key = "36572423112117696224165833631177730849457409908727827954083586177537634882175.None"
+        key = random.choice(keys)  # .decode("utf-8")
         print("key selected:", key)
         data_hash = key.split(".")[0]
         print("data_hash:", data_hash)
 
         # Fetch the associated validator storage information (size, prev_seed, commitment_hash)
         data = database.get(key)
-        print("data:", data)
         data = json.loads(data.decode("utf-8"))
+        print("data:", data)
 
         # Get random chunksize given total size
-        chunk_size = (
-            get_random_chunksize(data["size"]) // 4
-        )  # at least 4 chunks # TODO make this a hyperparam
-        print("chunksize:", chunksize)
+        chunk_size = get_random_chunksize(data["size"]) // chunk_factor
+        print("chunksize:", chunk_size)
 
         # Calculate number of chunks
         num_chunks = data["size"] // chunk_size
@@ -285,6 +216,23 @@ def challenge(metagraph):  #
         # Verify the response
         verified = verify_challenge_with_seed(response)
         print(f"Is verified: {verified}")
+
+        # Update storage with new seed
+        data["prev_seed"] = synapse.seed
+        database.set(key, json.dumps(data).encode())
+
+    # We want to get back from the miner:
+    # - the data chunk itself (to prove they still have it)
+    # - the random value to open the commitment
+    # - the merkle proof for the data chunk
+
+    # TODO: maybe we additionally want a random challenge here on the original data?
+    # Perhaps verify they signed the data chunk with their wallet? (e.g. dendrite signature and axon verify?)
+    # Or a (data_chunk + <random_value|miner_key>) signature?
+    # This way we have 3 layers of security:
+    # - (1) the commitment + random value + original data to prove they have the data now
+    # - (2) the merkle proof to prove they stored it originally
+    # - (3) the data chunk signature to verify they also have the data (redundant with 1?)
 
 
 def retrieve(dendrite, metagraph, data_hash):
