@@ -91,8 +91,7 @@ class Retrieve(bt.Synapse):
 
 class Update(bt.Synapse):
     # Lookup key
-    data_hash: str
-    hotkey: str
+    key: str # key = f"{data_hash}.{hotkey}"
 
     # Data to update
     prev_seed: str  # hex string

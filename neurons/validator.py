@@ -70,12 +70,32 @@ def store_file_data(metagraph, directory=None, file_bytes=None):
     # possibly textbooks, pdfs, audio files, pictures, etc. to mimick user data
     pass
 
+import torch
+async def broadcast(key, data, metagraph, stake_threshold=10000):
+    """Send updates to all validators on the network when creating or updating in index value"""
 
-async def broadcast():
-    # Send updates to all validators on the network when creating or updating in index value
     # Determine axons to query from metagraph
+    vpermits = metagraph.validator_permit
+    vpermit_uids = [uid for uid, permit in enumerate(vpermits) if permit]
+    vpermit_uids = torch.where(vpermits)[0]
+    query_uids = torch.where(metagraph.S[vpermit_uids] > stake_threshold)[0]
+    axons = [metagraph.axons[uid] for uid in query_uids]
+
     # Create synapse store
+    synapse = protocol.Update(
+        key=key,
+        prev_seed=data["prev_seed"],
+        size=data["size"],
+        commitment_hash=data["commitment_hash"],
+        encryption_key=data["encryption_key"],
+        encryption_nonce=data["encryption_nonce"],
+        encryption_tag=data["encryption_tag"],
+    )
+    #     **data,
+    # )
+
     # Send synapse to all validator axons
+
     pass
 
 
