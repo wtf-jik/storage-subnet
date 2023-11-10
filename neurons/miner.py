@@ -47,9 +47,6 @@ from storage.utils import (
     hex_to_ecc_point,
     b64_encode,
     b64_decode,
-    verify_store_with_seed,
-    verify_challenge_with_seed,
-    verify_retrieve_with_seed,
 )
 
 
@@ -506,6 +503,8 @@ def main(config):
         from storage.utils import (
             GetSynapse,
             verify_store_with_seed,
+            verify_challenge_with_seed,
+            verify_retrieve_with_seed,
             get_random_chunksize,
             decrypt_aes_gcm,
         )

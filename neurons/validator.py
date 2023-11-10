@@ -71,6 +71,18 @@ def store_file_data(metagraph, directory=None, file_bytes=None):
     pass
 
 
+async def broadcast():
+    # Send updates to all validators on the network when creating or updating in index value
+    # Determine axons to query from metagraph
+    # Create synapse store
+    # Send synapse to all validator axons
+    pass
+
+
+def update_index(synapse: protocol.Update):
+    pass
+
+
 def store_random_data(curve, maxsize, metagraph, redundacy=3, key=None):
     # Setup CRS for this round of validation
     g, h = setup_CRS(curve=curve)
@@ -128,11 +140,9 @@ def store_random_data(curve, maxsize, metagraph, redundacy=3, key=None):
                 weights[uid] = 0.0
                 retry_uids.append(uid)
                 continue
-            # Store the hash->hotkey->size mapping in DB
-            # TODO: update this to store by hotkey rather than pair so we can efficiently
-            # lookup which miners have what data and query them
-            # NOTE: this will become a problem when the size of the database grows too large
+
             data_hash = hash_data(encrypted_data)
+
             key = f"{data_hash}.{response.axon.hotkey}"
             response_storage = {
                 "prev_seed": synapse.seed,
@@ -144,9 +154,14 @@ def store_random_data(curve, maxsize, metagraph, redundacy=3, key=None):
                 "encryption_tag": tag.hex(),
             }
             bt.logging.debug(f"Storing data {response_storage}")
+            dumped_data = json.dumps(response_storage).encode()
+
             # Store in the database according to the data hash and the miner hotkey
-            database.set(key, json.dumps(response_storage).encode())
+            database.set(key, dumped_data)
             bt.logging.debug(f"Stored data in database with key: {key}")
+
+            # Broadcast the update to all other validators
+            broadcast(key, dumped_data)
 
         # Get a new set of UIDs to query for those left behind
         if retry_uids != []:
@@ -380,6 +395,15 @@ def main(config):
     # Setup database
     database = redis.StrictRedis(
         host=config.database_host, port=config.database_port, db=config.database_index
+    )
+
+    # Setup axon for broadcasting
+    axon = bt.axon(wallet=wallet, config=config)
+    bt.logging.info(f"Axon: {axon}")
+
+    # attach the update function to the axon
+    axon.attach(
+        forward_fn=update_index,
     )
 
     # Each validator gets a unique identity (UID) in the network for differentiation.

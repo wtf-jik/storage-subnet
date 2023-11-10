@@ -87,3 +87,19 @@ class Retrieve(bt.Synapse):
     data: typing.Optional[str] = None
     commitment_hash: typing.Optional[str] = None
     commitment_proof: typing.Optional[str] = None
+
+
+class Update(bt.Synapse):
+    # Lookup key
+    data_hash: str
+    hotkey: str
+
+    # Data to update
+    prev_seed: str  # hex string
+    size: int  # size of data (bytes)
+    commitment_hash: str  # contains the seed
+
+    # TODO: make these private (do not share in production)
+    encryption_key: str  # hex string
+    encryption_nonce: str  # hex string
+    encryption_tag: str  # hex string
