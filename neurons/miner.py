@@ -195,8 +195,9 @@ def main(config):
 
     def save_data_to_filesystem(data, directory, filename):
         # Ensure the directory exists
+        directory = os.path.expanduser(directory)
         os.makedirs(directory, exist_ok=True)
-        file_path = os.path.join(os.path.expanduser(directory), filename)
+        file_path = os.path.join(directory, filename)
         with open(file_path, "wb") as file:
             file.write(data)
         return file_path
