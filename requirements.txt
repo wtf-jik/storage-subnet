@@ -2,3 +2,4 @@ bittensor
 torch
 redis
 pycryptodome
+wandb

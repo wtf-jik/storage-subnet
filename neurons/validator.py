@@ -49,13 +49,12 @@ from storage.utils import (
     deserialize_dict_with_bytes,
     verify_challenge_with_seed,
     verify_store_with_seed,
+    verify_retrieve_with_seed,
 )
 
 
-"""This cursor-based method uses SCAN under the hood and is non-blocking"""
-
-
 def safe_key_search(database, pattern):
+    """This cursor-based method uses SCAN under the hood and is non-blocking"""
     return [key for key in database.scan_iter(pattern)]
 
 
@@ -70,14 +69,17 @@ def store_file_data(metagraph, directory=None, file_bytes=None):
     # possibly textbooks, pdfs, audio files, pictures, etc. to mimick user data
     pass
 
-import torch
-async def broadcast(key, data, metagraph, stake_threshold=10000):
+
+async def broadcast(key, data, metagraph, dendrite, stake_threshold=10000):
     """Send updates to all validators on the network when creating or updating in index value"""
 
     # Determine axons to query from metagraph
     vpermits = metagraph.validator_permit
     vpermit_uids = [uid for uid, permit in enumerate(vpermits) if permit]
     vpermit_uids = torch.where(vpermits)[0]
+
+    # Exclude your own uid
+    vpermit_uids = vpermit_uids[vpermit_uids != axon.hotkey.ss58_address]
     query_uids = torch.where(metagraph.S[vpermit_uids] > stake_threshold)[0]
     axons = [metagraph.axons[uid] for uid in query_uids]
 
@@ -86,24 +88,56 @@ async def broadcast(key, data, metagraph, stake_threshold=10000):
         key=key,
         prev_seed=data["prev_seed"],
         size=data["size"],
-        commitment_hash=data["commitment_hash"],
+        counter=data["counter"],
         encryption_key=data["encryption_key"],
         encryption_nonce=data["encryption_nonce"],
         encryption_tag=data["encryption_tag"],
     )
-    #     **data,
-    # )
 
     # Send synapse to all validator axons
+    responses = await dendrite(
+        axons,
+        synapse,
+        deserialize=False,
+    )
 
-    pass
+    # TODO: Check the responses to ensure all validaors are updated
 
 
 def update_index(synapse: protocol.Update):
-    pass
+    """Update the validator index with the new data"""
+    data = database.get(synapse.key)
+    entry = {
+        k: v
+        for k, v in synapse.dict()
+        if k
+        in [
+            "prev_seed",
+            "size",
+            "counter",
+            "encryption_key",
+            "encryption_nonce",
+            "encryption_tag",
+        ]
+    }
+    if not data:
+        # Add it to the index directly
+        database.set(synapse.key, json.dumps(entry).encode())
+    else:
+        # Check for conflicts
+        local_entry = json.loads(database.get(synapse.key))
+        if local_entry["counter"] > synapse.counter:
+            # Do nothing, we have a newer or current version
+            return
+        else:
+            # Update the index to the latest data
+            database.set(synapse.key, json.dumps(entry).encode())
 
 
-def store_random_data(curve, maxsize, metagraph, redundacy=3, key=None):
+async def store_data(curve, maxsize, metagraph, redundacy=3, key=None):
+    # TODO: Make this asynchronous so we can await dendrite() instead
+    # and then score miners based on who responds fastest with correct proof
+
     # Setup CRS for this round of validation
     g, h = setup_CRS(curve=curve)
 
@@ -167,8 +201,9 @@ def store_random_data(curve, maxsize, metagraph, redundacy=3, key=None):
             response_storage = {
                 "prev_seed": synapse.seed,
                 "size": sys.getsizeof(encrypted_data),
-                "commitment_hash": response.commitment_hash,  # contains the seed
-                # TODO: these will be private to the validator, not stored in decentralized db
+                "counter": 0,
+                # TODO: ideally these will be private to the client application,
+                # not stored in validators because of collusion attacks
                 "encryption_key": encryption_key.hex(),
                 "encryption_nonce": nonce.hex(),
                 "encryption_tag": tag.hex(),
@@ -190,16 +225,12 @@ def store_random_data(curve, maxsize, metagraph, redundacy=3, key=None):
 
 
 def challenge(metagraph, chunk_factor=4):  #
-    # TODO: come up with an algorithm for properly challenging miners and
-    # ensure an even spread statistically of which miners are queried, and
-    # which indices are queried (gaussian randomness?)
-
-    # For each UID:
-    # - fetch which data they have (list of hashes)
-    # - randomly select a hash
-    # - randomly select a commitment/data_chunk index
-    # - send the challenge to the miner
-    hotkeys = metagraph.hotkeys
+    # TODO: Do this asynchronously and see who returns the data
+    # fastest (passes verification), and rank them highest
+    # Look to text-propmting so that we can use async queries with ascyncio
+    # by encapsulating in functions and making coroutines
+    # Ideally, we'll create each challenge as a coroutine and then
+    # await the results of each challenge asynchronously
     for hotkey in [
         "5C86aJ2uQawR6P6veaJQXNK9HaWh6NMbUhTiLs65kq4ZW3NH"
     ]:  # metegraph.hotkeys
@@ -235,15 +266,18 @@ def challenge(metagraph, chunk_factor=4):  #
             chunk_size=chunk_size,
             g=ecc_point_to_hex(g),
             h=ecc_point_to_hex(h),
-            seed=get_random_bytes(32).hex(),  # 256-bit random seed
+            curve="P-256",
+            challenge_index=random.choice(range(num_chunks)),
+            seed=get_random_bytes(32).hex(),
         )
 
-        # Grab the UID to query
+        # Grab the axon to query
         uid = metagraph.hotkeys.index(hotkey)
+        axon = metagraph.axons[uid]
 
         # Send the challenge to the miner
         response = dendrite.query(
-            [metagraph.axons[uid]],
+            [axon],
             synapse,
             deserialize=True,
         )
@@ -254,20 +288,8 @@ def challenge(metagraph, chunk_factor=4):  #
 
         # Update storage with new seed
         data["prev_seed"] = synapse.seed
+        data["counter"] += 1
         database.set(key, json.dumps(data).encode())
-
-    # We want to get back from the miner:
-    # - the data chunk itself (to prove they still have it)
-    # - the random value to open the commitment
-    # - the merkle proof for the data chunk
-
-    # TODO: maybe we additionally want a random challenge here on the original data?
-    # Perhaps verify they signed the data chunk with their wallet? (e.g. dendrite signature and axon verify?)
-    # Or a (data_chunk + <random_value|miner_key>) signature?
-    # This way we have 3 layers of security:
-    # - (1) the commitment + random value + original data to prove they have the data now
-    # - (2) the merkle proof to prove they stored it originally
-    # - (3) the data chunk signature to verify they also have the data (redundant with 1?)
 
 
 def retrieve(dendrite, metagraph, data_hash):
@@ -280,34 +302,37 @@ def retrieve(dendrite, metagraph, data_hash):
         axons_to_query.append(metagraph.axons[uid])
         print("appending hotkey:", hotkey)
 
-        # TODO: potentially issue a challenge to the miners to fetch the data
-        # may be as simple as a query the commitment hash chain
-        # C1 = hash(C0 || hash(data || current_seed)) ?
-        # Check out scratch/XOR_scheme.py
-
     # query all N (from redundancy factor) with M challenges (x% of the total data)
-    # TODO: see who returns the data fastest, and rank them highest
+    # TODO: see who returns the data fastest (passes verification), and rank them highest
     responses = await dendrite(
         axons_to_query,
         protocol.Retrieve(
             data_hash=data_hash,
+            seed=get_random_bytes(32).hex(),
         ),
         deserialize=True,
     )
 
     for response in responses:
         print("response:", response)
-        if hash_data(base64.b64decode(respnonse.data)) != data_hash:
+        decoded_data = base64.b64decode(respnonse.data)
+        if hash_data(decoded_data) != data_hash:
             print("data hash does not match!")
             continue
 
+        if not verify_retrieve_with_seed(rdata):
+            print("data verification failed!")
+            continue
+
         # Decrypt the data using the validator stored encryption keys
-        response.data = decrypt_aes_gcm(
-            base64.b64decode(response.data),
+        data = decrypt_aes_gcm(
+            decoded_data,
             bytes.fromhex(data["encryption_key"]),
             bytes.fromhex(data["encryption_nonce"]),
             bytes.fromhex(data["encryption_tag"]),
         )
+
+        # TODO: return this to the user
 
 
 # Step 2: Set up the configuration parser
@@ -345,20 +370,12 @@ def get_config():
     parser.add_argument(
         "--databse_index", default=0, help="The database number of the redis database."
     )
-    # Adds override arguments for network and netuid.
     parser.add_argument("--netuid", type=int, default=1, help="The chain subnet uid.")
-    # Adds subtensor specific arguments i.e. --subtensor.chain_endpoint ... --subtensor.network ...
     bt.subtensor.add_args(parser)
-    # Adds logging specific arguments i.e. --logging.debug ..., --logging.trace .. or --logging.logging_dir ...
     bt.logging.add_args(parser)
-    # Adds wallet specific arguments i.e. --wallet.name ..., --wallet.hotkey ./. or --wallet.path ...
     bt.wallet.add_args(parser)
-    # Parse the config (will take command-line arguments if provided)
-    # To print help message, run python3 template/validator.py --help
     config = bt.config(parser)
 
-    # Step 3: Set up logging directory
-    # Logging is crucial for monitoring and debugging purposes.
     config.full_path = os.path.expanduser(
         "{}/{}/{}/netuid{}/{}".format(
             config.logging.logging_dir,

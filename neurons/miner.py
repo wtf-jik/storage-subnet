@@ -408,9 +408,9 @@ def main(config):
         lookup_key = f"{hash_data(encrypted_byte_data)}.{response_store.axon.hotkey}"
         bt.logging.debug(f"lookup key: {lookup_key}")
         validator_store = {
-            "seed": response_store.seed,
+            "prev_seed": response_store.seed,
             "size": sys.getsizeof(encrypted_byte_data),
-            "commitment_hash": response_store.commitment_hash,
+            "counter": 0,
             "encryption_key": encryption_key.hex(),
             "encryption_nonce": nonce.hex(),
             "encryption_tag": tag.hex(),
@@ -451,7 +451,7 @@ def main(config):
             h=ecc_point_to_hex(h),
             curve=config.curve,
             challenge_index=random.choice(range(num_chunks)),
-            seed=get_random_bytes(32).hex(),  # data["seed"], # should be a NEW seed
+            seed=get_random_bytes(32).hex(),
         )
         bt.logging.debug("\nChallenge synapse:", syn)
         response_challenge = challenge(syn)
@@ -459,6 +459,11 @@ def main(config):
         bt.logging.debug(response_challenge.dict())
         verified = verify_challenge_with_seed(response_challenge)
         bt.logging.debug(f"Is verified: {verified}")
+        # Update validator storage
+        data["prev_seed"] = response_challenge.seed
+        data["counter"] += 1
+        dump = json.dumps(data).encode()
+        database.set(lookup_key, dump)
 
         # Challenge a 2nd time to verify the chain of proofs
         bt.logging.debug("\n\n2nd challenge phase------------------------".upper())
@@ -478,6 +483,11 @@ def main(config):
         bt.logging.debug(response_challenge.dict())
         verified = verify_challenge_with_seed(response_challenge)
         bt.logging.debug(f"Is verified 2: {verified}")
+        # Update validator storage
+        data["prev_seed"] = response_challenge.seed
+        data["counter"] += 1
+        dump = json.dumps(data).encode()
+        database.set(lookup_key, dump)
 
         bt.logging.debug("\n\nretrieve phase------------------------".upper())
         ryn = storage.protocol.Retrieve(
@@ -494,6 +504,14 @@ def main(config):
         bt.logging.debug("decoded base64 data:", decoded)
         unencrypted = decrypt_aes_gcm(decoded, encryption_key, nonce, tag)
         bt.logging.debug("decrypted data:", unencrypted)
+
+        # Update validator storage
+        data["prev_seed"] = ryn.seed
+        data["counter"] += 1
+        dump = json.dumps(data).encode()
+        database.set(lookup_key, dump)
+
+        print("final validator store:", database.get(lookup_key))
         import pdb
 
         pdb.set_trace()

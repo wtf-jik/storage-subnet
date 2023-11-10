@@ -25,8 +25,6 @@ from Crypto.PublicKey import ECC
 
 # Basically setup for a given piece of data
 class Store(bt.Synapse):
-    # TODO: write deserialize
-
     # Data to store
     encrypted_data: str  # base64 encoded string of encrypted data (bytes)
 
@@ -47,8 +45,6 @@ class Store(bt.Synapse):
 
 
 class Challenge(bt.Synapse):
-    # TODO: write deserialize
-
     # Query parameters
     challenge_hash: str  # hash of the data to challenge
     challenge_index: int  # block indices to challenge
@@ -91,12 +87,12 @@ class Retrieve(bt.Synapse):
 
 class Update(bt.Synapse):
     # Lookup key
-    key: str # key = f"{data_hash}.{hotkey}"
+    key: str  # key = f"{data_hash}.{hotkey}"
 
     # Data to update
     prev_seed: str  # hex string
     size: int  # size of data (bytes)
-    commitment_hash: str  # contains the seed
+    counter: int  # version of data (last-write-wins)
 
     # TODO: make these private (do not share in production)
     encryption_key: str  # hex string
