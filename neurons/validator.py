@@ -1,266 +1,456 @@
-# The MIT License (MIT)
-# Copyright © 2023 Yuma Rao
-# Copyright © 2023 philanthrope
-
-# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
-# documentation files (the “Software”), to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
-# and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-# The above copyright notice and this permission notice shall be included in all copies or substantial portions of
-# the Software.
-
-# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
-# THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
-
-# Bittensor Validator Template:
-
-# Step 1: Import necessary libraries and modules
 import os
 import sys
+import copy
 import time
 import redis
 import torch
 import base64
+import typing
+import asyncio
 import argparse
 import traceback
 import bittensor as bt
-from random import random_choice
+from traceback import print_exception
+from random import choice as random_choice
 from Crypto.Random import get_random_bytes
 
-# import this repo
 from storage import protocol
+
 from storage.utils import (
     hash_data,
     setup_CRS,
     chunk_data,
     MerkleTree,
     encrypt_data,
-    decrypt_aes_gcm,
+    decrypt_data,
     ECCommitment,
     make_random_file,
+    safe_key_search,
     get_random_chunksize,
     ecc_point_to_hex,
     hex_to_ecc_point,
-    serialize_dict_with_bytes,
-    deserialize_dict_with_bytes,
     verify_challenge_with_seed,
     verify_store_with_seed,
     verify_retrieve_with_seed,
+    b64_decode,
+    b64_encode,
+)
+
+from storage.validator.config import config, check_config, add_args
+
+
+from storage.validator.state import (
+    should_checkpoint,
+    checkpoint,
+    should_reinit_wandb,
+    reinit_wandb,
+    load_state,
+    save_state,
+    init_wandb,
+    ttl_get_block,
+)
+
+from storage.validator.weights import (
+    should_set_weights,
+    set_weights,
 )
 
 
-def safe_key_search(database, pattern):
-    """This cursor-based method uses SCAN under the hood and is non-blocking"""
-    return [key for key in database.scan_iter(pattern)]
+def get_sorted_response_times(uids, responses):
+    axon_times = [
+        (uids[idx], response.axon.process_time)
+        for idx, response in enumerate(responses)
+    ]
+    # Sorting in ascending order since lower process time is better
+    sorted_axon_times = sorted(axon_times, key=lambda x: x[1])
+    return sorted_axon_times
 
 
-# TODO: select a subset of miners to store given the redundancy factor N
-def select_subset_uids(uids: list, N: int):
-    return random.choices(uids, k=N)
+def scale_rewards_by_response_time(uids, responses, rewards):
+    sorted_axon_times = get_sorted_response_times(uids, responses)
+
+    # Extract only the process times
+    process_times = [proc_time for _, proc_time in sorted_axon_times]
+
+    # Find min and max values for normalization
+    min_time = min(process_times)
+    max_time = max(process_times)
+
+    # Normalize these times to a scale of 0 to 1 (inverted)
+    normalized_scores = [
+        (max_time - proc_time) / (max_time - min_time) for proc_time in process_times
+    ]
+
+    # Scale the rewards by these normalized scores
+    for idx, (uid, _) in enumerate(sorted_axon_times):
+        rewards[uid] *= normalized_scores[idx]
+
+    return rewards
 
 
-def store_file_data(metagraph, directory=None, file_bytes=None):
-    # TODO: write this to be a mirror of store_random_data
-    # it will not be random but use real data from the validator filesystem or client data
-    # possibly textbooks, pdfs, audio files, pictures, etc. to mimick user data
-    pass
+def check_uid_availability(
+    metagraph: "bt.metagraph.Metagraph", uid: int, vpermit_tao_limit: int
+) -> bool:
+    """Check if uid is available. The UID should be available if it is serving and has less than vpermit_tao_limit stake
+    Args:
+        metagraph (:obj: bt.metagraph.Metagraph): Metagraph object
+        uid (int): uid to be checked
+        vpermit_tao_limit (int): Validator permit tao limit
+    Returns:
+        bool: True if uid is available, False otherwise
+    """
+    # Filter non serving axons.
+    if not metagraph.axons[uid].is_serving:
+        return False
+    # Filter validator permit > 1024 stake.
+    if metagraph.validator_permit[uid]:
+        if metagraph.S[uid] > vpermit_tao_limit:
+            return False
+    # Available otherwise.
+    return True
 
 
-async def broadcast(key, data, metagraph, dendrite, stake_threshold=10000):
-    """Send updates to all validators on the network when creating or updating in index value"""
+class neuron:
+    @classmethod
+    def check_config(cls, config: "bt.Config"):
+        check_config(cls, config)
 
-    # Determine axons to query from metagraph
-    vpermits = metagraph.validator_permit
-    vpermit_uids = [uid for uid, permit in enumerate(vpermits) if permit]
-    vpermit_uids = torch.where(vpermits)[0]
+    @classmethod
+    def add_args(cls, parser):
+        add_args(cls, parser)
 
-    # Exclude your own uid
-    vpermit_uids = vpermit_uids[vpermit_uids != axon.hotkey.ss58_address]
-    query_uids = torch.where(metagraph.S[vpermit_uids] > stake_threshold)[0]
-    axons = [metagraph.axons[uid] for uid in query_uids]
+    @classmethod
+    def config(cls):
+        return config(cls)
 
-    # Create synapse store
-    synapse = protocol.Update(
-        key=key,
-        prev_seed=data["prev_seed"],
-        size=data["size"],
-        counter=data["counter"],
-        encryption_key=data["encryption_key"],
-        encryption_nonce=data["encryption_nonce"],
-        encryption_tag=data["encryption_tag"],
-    )
+    subtensor: "bt.subtensor"
+    wallet: "bt.wallet"
+    metagraph: "bt.metagraph"
 
-    # Send synapse to all validator axons
-    responses = await dendrite(
-        axons,
-        synapse,
-        deserialize=False,
-    )
+    def __init__(self):
+        self.config = neuron.config()
+        self.check_config(self.config)
+        bt.logging(config=self.config, logging_dir=self.config.neuron.full_path)
+        print(self.config)
+        bt.logging.info("neuron.__init__()")
 
-    # TODO: Check the responses to ensure all validaors are updated
+        # Init device.
+        bt.logging.debug("loading", "device")
+        self.device = torch.device(self.config.neuron.device)
+        bt.logging.debug(str(self.device))
 
+        # Init subtensor
+        bt.logging.debug("loading", "subtensor")
+        self.subtensor = bt.subtensor(config=self.config)
+        bt.logging.debug(str(self.subtensor))
 
-def update_index(synapse: protocol.Update):
-    """Update the validator index with the new data"""
-    data = database.get(synapse.key)
-    entry = {
-        k: v
-        for k, v in synapse.dict()
-        if k
-        in [
-            "prev_seed",
-            "size",
-            "counter",
-            "encryption_key",
-            "encryption_nonce",
-            "encryption_tag",
-        ]
-    }
-    if not data:
-        # Add it to the index directly
-        database.set(synapse.key, json.dumps(entry).encode())
-    else:
-        # Check for conflicts
-        local_entry = json.loads(database.get(synapse.key))
-        if local_entry["counter"] > synapse.counter:
-            # Do nothing, we have a newer or current version
-            return
+        # Init wallet.
+        bt.logging.debug("loading", "wallet")
+        self.wallet = bt.wallet(config=self.config)
+        self.wallet.create_if_non_existent()
+        if not self.config.wallet._mock:
+            if not self.subtensor.is_hotkey_registered_on_subnet(
+                hotkey_ss58=self.wallet.hotkey.ss58_address, netuid=self.config.netuid
+            ):
+                raise Exception(
+                    f"Wallet not currently registered on netuid {self.config.netuid}, please first register wallet before running"
+                )
+
+        bt.logging.debug(f"wallet: {str(self.wallet)}")
+
+        # Init metagraph.
+        bt.logging.debug("loading", "metagraph")
+        self.metagraph = bt.metagraph(
+            netuid=self.config.netuid, network=self.subtensor.network, sync=False
+        )  # Make sure not to sync without passing subtensor
+        self.metagraph.sync(subtensor=self.subtensor)  # Sync metagraph with subtensor.
+        self.hotkeys = copy.deepcopy(self.metagraph.hotkeys)
+        bt.logging.debug(str(self.metagraph))
+
+        # Setup database
+        self.database = redis.StrictRedis(
+            host=self.config.database_host,
+            port=self.config.database_port,
+            db=self.config.database_index,
+        )
+
+        # Init Weights.
+        bt.logging.debug("loading", "moving_averaged_scores")
+        self.moving_averaged_scores = torch.zeros((self.metagraph.n)).to(self.device)
+        bt.logging.debug(str(self.moving_averaged_scores))
+
+        bt.logging.debug("serving ip to chain...")
+        try:
+            axon = bt.axon(wallet=self.wallet, config=self.config)
+
+            axon.attach(
+                forward_fn=self.update_index,
+            )
+
+            try:
+                self.subtensor.serve_axon(
+                    netuid=self.config.netuid,
+                    axon=axon,
+                )
+            except Exception as e:
+                bt.logging.error(f"Failed to serve Axon with exception: {e}")
+                pass
+
+            del axon
+        except Exception as e:
+            bt.logging.error(f"Failed to create Axon initialize with exception: {e}")
+            pass
+
+        # Dendrite pool for querying the network.
+        bt.logging.debug("loading", "dendrite_pool")
+        if self.config.neuron.mock_dendrite_pool:
+            self.dendrite = MockDendrite()
         else:
-            # Update the index to the latest data
-            database.set(synapse.key, json.dumps(entry).encode())
+            self.dendrite = bt.dendrite(wallet=self.wallet)
+        bt.logging.debug(str(self.dendrite))
 
+        # Init the event loop.
+        self.loop = asyncio.get_event_loop()
 
-async def store_data(curve, maxsize, metagraph, redundacy=3, key=None):
-    # TODO: Make this asynchronous so we can await dendrite() instead
-    # and then score miners based on who responds fastest with correct proof
+        # Init wandb.
+        if not self.config.wandb.off:
+            bt.logging.debug("loading", "wandb")
+            init_wandb(self)
 
-    # Setup CRS for this round of validation
-    g, h = setup_CRS(curve=curve)
+        if self.config.neuron.epoch_length_override:
+            self.config.neuron.epoch_length = self.config.neuron.epoch_length_override
+        else:
+            self.config.neuron.epoch_length = 100
 
-    # Make a random bytes file to test the miner
-    random_data = make_random_file(maxsize=maxsize)
+        self.prev_block = ttl_get_block(self)
+        self.step = 0
 
-    # Random encryption key for now (never will decrypt)
-    encryption_key = key or get_random_bytes(32)
+    def get_random_uids(
+        self, k: int, exclude: typing.List[int] = None
+    ) -> torch.LongTensor:
+        """Returns k available random uids from the metagraph.
+        Args:
+            k (int): Number of uids to return.
+            exclude (List[int]): List of uids to exclude from the random sampling.
+        Returns:
+            uids (torch.LongTensor): Randomly sampled available uids.
+        Notes:
+            If `k` is larger than the number of available `uids`, set `k` to the number of available `uids`.
+        """
+        candidate_uids = []
+        avail_uids = []
 
-    # Encrypt the data
-    encrypted_data, nonce, tag = encrypt_data(
-        random_data,
-        encryption_key,
-    )
+        for uid in range(self.metagraph.n.item()):
+            uid_is_available = check_uid_availability(
+                self.metagraph, uid, self.config.neuron.vpermit_tao_limit
+            )
+            uid_is_not_excluded = exclude is None or uid not in exclude
 
-    # Convert to base64 for compactness
-    b64_encrypted_data = base64.b64encode(encrypted_data).decode("utf-8")
+            if uid_is_available:
+                avail_uids.append(uid)
+                if uid_is_not_excluded:
+                    candidate_uids.append(uid)
 
-    synapse = protocol.Store(
-        encrypted_data=b64_encrypted_data,
-        curve=curve,
-        g=ecc_point_to_hex(g),
-        h=ecc_point_to_hex(h),
-        seed=get_random_bytes(32).hex(),  # 256-bit seed
-    )
+        # Check if candidate_uids contain enough for querying, if not grab all avaliable uids
+        available_uids = candidate_uids
+        if len(candidate_uids) < k:
+            available_uids += random.sample(
+                [uid for uid in avail_uids if uid not in candidate_uids],
+                k - len(candidate_uids),
+            )
+        uids = torch.tensor(random.sample(available_uids, k))
+        return uids
 
-    # Select subset of miners to query (e.g. redunancy factor of N)
-    uids = select_subset_uids(metagraph.uids, N=redundancy)
-    axons = [metagraph.axons[uid] for uid in uids]
-    retry_uids = [None]
+    def apply_reward_scores(self, uids, responses, rewards):
+        # Scale reward by the ranking of the response time
+        # If the response time is faster, the reward is higher
+        # This should reflect the distribution of axon response times (minmax norm)
+        scaled_rewards = scale_rewards_by_response_time(uids, responses, rewards)
 
-    while len(retry_uids):
-        if retry_uids == [None]:
-            # initial loop
-            retry_uids = []
+        # Compute forward pass rewards, assumes followup_uids and answer_uids are mutually exclusive.
+        # shape: [ metagraph.n ]
+        scattered_rewards: torch.FloatTensor = self.moving_averaged_scores.scatter(
+            0, uids, scaled_rewards
+        ).to(self.device)
 
-        # Broadcast the query to selected miners on the network.
-        # TODO: make this asynchronous and use await dendrite() instead
-        responses = dendrite.query(
+        # Update moving_averaged_scores with rewards produced by this step.
+        # shape: [ metagraph.n ]
+        alpha: float = self.config.neuron.moving_average_alpha
+        self.moving_averaged_scores: torch.FloatTensor = alpha * scattered_rewards + (
+            1 - alpha
+        ) * self.moving_averaged_scores.to(self.device)
+
+    def update_index(self, synapse: protocol.Update):
+        """Update the validator index with the new data"""
+        data = self.database.get(synapse.key)
+        entry = {
+            k: v
+            for k, v in synapse.dict()
+            if k
+            in [
+                "prev_seed",
+                "size",
+                "counter",
+                "encryption_payload",
+            ]
+        }
+        if not data:
+            # Add it to the index directly
+            self.database.set(synapse.key, json.dumps(entry).encode())
+        else:
+            # Check for conflicts
+            local_entry = json.loads(database.get(synapse.key))
+            if local_entry["counter"] > synapse.counter:
+                # Do nothing, we have a newer or current version
+                return
+            else:
+                # Update the index to the latest data
+                self.database.set(synapse.key, json.dumps(entry).encode())
+
+    async def broadcast(self, lookup_key, data):
+        """Send updates to all validators on the network when creating or updating in index value"""
+
+        # Determine axons to query from metagraph
+        vpermits = self.metagraph.validator_permit
+        vpermit_uids = [uid for uid, permit in enumerate(vpermits) if permit]
+        vpermit_uids = torch.where(vpermits)[0]
+
+        # Exclude your own uid
+        vpermit_uids = vpermit_uids[vpermit_uids != axon.hotkey.ss58_address]
+        query_uids = torch.where(
+            self.metagraph.S[vpermit_uids]
+            > self.config.neuron.broadcast_stake_threshold
+        )[0]
+        axons = [self.metagraph.axons[uid] for uid in query_uids]
+
+        # Create synapse store
+        synapse = protocol.Update(
+            lookup_key=lookup_key,
+            prev_seed=data["prev_seed"],
+            size=data["size"],
+            counter=data["counter"],
+            encryption_payload=data["encryption_payload"],
+        )
+
+        # Send synapse to all validator axons
+        responses = await self.dendrite(
             axons,
             synapse,
             deserialize=False,
         )
 
-        # Log the results for monitoring purposes.
-        bt.logging.info(f"Received responses: {responses}")
+        # TODO: Check the responses to ensure all validaors are updated
 
-        # TEMP weights vector
-        weights = [1.0] * len(metagraph.uids)
-        for uid, response in enumerate(zip(uids, responses)):
-            # Verify the commitment
-            if not verify_challenge_with_seed(response):
-                # TODO: flag this miner for 0 weight (or negative rewards?)
-                weights[uid] = 0.0
-                retry_uids.append(uid)
-                continue
+    async def store_user_data(self, data: bytes, wallet: bt.wallet):
+        # Store user data with the user's wallet as encryption key
+        return store_data(data=data, wallet=wallet)
 
-            data_hash = hash_data(encrypted_data)
+    async def store_validator_data(self, data: bytes):
+        # Store random data using the validator's pubkey as the encryption key
+        return store_data(wallet=self.wallet)
 
-            key = f"{data_hash}.{response.axon.hotkey}"
-            response_storage = {
-                "prev_seed": synapse.seed,
-                "size": sys.getsizeof(encrypted_data),
-                "counter": 0,
-                # TODO: ideally these will be private to the client application,
-                # not stored in validators because of collusion attacks
-                "encryption_key": encryption_key.hex(),
-                "encryption_nonce": nonce.hex(),
-                "encryption_tag": tag.hex(),
-            }
-            bt.logging.debug(f"Storing data {response_storage}")
-            dumped_data = json.dumps(response_storage).encode()
+    async def store_data(self, data: bytes = None, wallet: bt.wallet = None):
+        # Setup CRS for this round of validation
+        g, h = setup_CRS(curve=self.config.curve)
 
-            # Store in the database according to the data hash and the miner hotkey
-            database.set(key, dumped_data)
-            bt.logging.debug(f"Stored data in database with key: {key}")
+        # Make a random bytes file to test the miner if none provided
+        data = data or make_random_file(maxsize=self.config.maxsize)
 
-            # Broadcast the update to all other validators
-            broadcast(key, dumped_data)
+        # Encrypt the data
+        encrypted_data, encryption_payload = encrypt_data(data, wallet)
 
-        # Get a new set of UIDs to query for those left behind
-        if retry_uids != []:
-            uids = select_subset_uids(retry_uids, N=len(retry_uids))
-            axons = [metagraph.axons[uid] for uid in uids]
+        # Convert to base64 for compactness
+        b64_encrypted_data = base64.b64encode(encrypted_data).decode("utf-8")
 
+        synapse = protocol.Store(
+            encrypted_data=b64_encrypted_data,
+            curve=curve,
+            g=ecc_point_to_hex(g),
+            h=ecc_point_to_hex(h),
+            seed=get_random_bytes(32).hex(),  # 256-bit seed
+        )
 
-def challenge(metagraph, chunk_factor=4):  #
-    # TODO: Do this asynchronously and see who returns the data
-    # fastest (passes verification), and rank them highest
-    # Look to text-propmting so that we can use async queries with ascyncio
-    # by encapsulating in functions and making coroutines
-    # Ideally, we'll create each challenge as a coroutine and then
-    # await the results of each challenge asynchronously
-    for hotkey in [
-        "5C86aJ2uQawR6P6veaJQXNK9HaWh6NMbUhTiLs65kq4ZW3NH"
-    ]:  # metegraph.hotkeys
-        # Fetch the list of data hashes this miner has
-        keys = safe_key_search(database, f"*.{hotkey}")
-        print(f"all keys for hotkey {hotkey}\n{keys}")
+        # Select subset of miners to query (e.g. redunancy factor of N)
+        uids = select_subset_uids(metagraph.uids, N=self.config.redundancy)
+        axons = [self.metagraph.axons[uid] for uid in uids]
+        retry_uids = [None]
 
-        # Select a specific data hash to query
-        # key = random.choice(keys).decode("utf-8")
-        key = random.choice(keys)  # .decode("utf-8")
-        print("key selected:", key)
+        retries = 0
+        while len(retry_uids) and retries < 3:
+            if retry_uids == [None]:
+                # initial loop
+                retry_uids = []
+
+            # Broadcast the query to selected miners on the network.
+            responses = await self.dendrite(
+                axons,
+                synapse,
+                deserialize=False,
+            )
+
+            # Log the results for monitoring purposes.
+            bt.logging.info(f"Received responses: {responses}")
+
+            # Compute the rewards for the responses given proc time.
+            rewards: torch.FloatTensor = torch.zeros(
+                len(responses), dtype=torch.float32
+            ).to(self.device)
+
+            for idx, (uid, response) in enumerate(zip(uids, responses)):
+                # Verify the commitment
+                if not verify_challenge_with_seed(response):
+                    # TODO: flag this miner for 0 weight (or negative rewards?)
+                    rewards[idx] = 0.0
+                    retry_uids.append(uid)
+                    continue  # Skip trying to store the data
+                else:
+                    rewards[idx] = 1.0
+
+                data_hash = hash_data(encrypted_data)
+
+                key = f"{data_hash}.{response.axon.hotkey}"
+                response_storage = {
+                    "prev_seed": synapse.seed,
+                    "size": sys.getsizeof(encrypted_data),
+                    "counter": 0,
+                    "encryption_payload": encryption_payload,
+                }
+                bt.logging.debug(f"Storing data {response_storage}")
+                dumped_data = json.dumps(response_storage).encode()
+
+                # Store in the database according to the data hash and the miner hotkey
+                database.set(key, dumped_data)
+                bt.logging.debug(f"Stored data in database with key: {key}")
+
+                # Broadcast the update to all other validators
+                # TODO: ensure this will not block
+                # TODO: potentially batch update after all miners have responded?
+                broadcast(key, dumped_data)
+
+            self.apply_reward_scores(uids, responses, rewards)
+
+            # Get a new set of UIDs to query for those left behind
+            if retry_uids != []:
+                uids = select_subset_uids(metagraph.uids, N=len(retry_uids))
+                bt.logging.debug(f"Retrying with new uids: {uids}")
+                axons = [metagraph.axons[uid] for uid in uids]
+                retry_uids = []  # reset retry uids
+                retries += 1
+
+    async def handle_challenge(
+        self, hotkey: str
+    ) -> typing.Tuple[bool, protocol.Challenge]:
+        keys = safe_key_search(self.database, f"*.{hotkey}")
+        key = random.choice(keys)
         data_hash = key.split(".")[0]
-        print("data_hash:", data_hash)
 
-        # Fetch the associated validator storage information (size, prev_seed, commitment_hash)
-        data = database.get(key)
-        data = json.loads(data.decode("utf-8"))
-        print("data:", data)
-
-        # Get random chunksize given total size
-        chunk_size = get_random_chunksize(data["size"]) // chunk_factor
-        print("chunksize:", chunk_size)
-
-        # Calculate number of chunks
+        data = json.loads(self.database.get(key).decode("utf-8"))
+        chunk_size = (
+            get_random_chunksize(data["size"]) // self.config.neuron.chunk_factor
+        )
         num_chunks = data["size"] // chunk_size
-
-        # Get setup params
         g, h = setup_CRS()
 
-        # Pre-fill the challenge synapse with required data
         synapse = protocol.Challenge(
             challenge_hash=data_hash,
             chunk_size=chunk_size,
@@ -271,291 +461,160 @@ def challenge(metagraph, chunk_factor=4):  #
             seed=get_random_bytes(32).hex(),
         )
 
-        # Grab the axon to query
-        uid = metagraph.hotkeys.index(hotkey)
-        axon = metagraph.axons[uid]
+        axon = self.metagraph.axons[uid]
 
-        # Send the challenge to the miner
-        response = dendrite.query(
+        response = await self.dendrite(
             [axon],
             synapse,
             deserialize=True,
         )
 
-        # Verify the response
         verified = verify_challenge_with_seed(response)
-        print(f"Is verified: {verified}")
 
-        # Update storage with new seed
         data["prev_seed"] = synapse.seed
         data["counter"] += 1
-        database.set(key, json.dumps(data).encode())
+        self.database.set(key, json.dumps(data).encode())
 
+        return verified, response
 
-def retrieve(dendrite, metagraph, data_hash):
-    # fetch which miners have the data
-    keys = database.keys(f"{data_hash}.*")
-    axons_to_query = []
-    for key in keys:
-        hotkey = key.split(".")[1]
-        uid = metagraph.hotkeys.index(hotkey)
-        axons_to_query.append(metagraph.axons[uid])
-        print("appending hotkey:", hotkey)
+    async def challenge(self):
+        # Asynchronously challenge and see who returns the data
+        # fastest (passes verification), and rank them highest
+        # We create each challenge as a coroutine and then
+        # await the results of each challenge asynchronously
+        tasks = []
+        uids = self.get_random_uids(k=self.config.neuron.challenge_k)
+        for uid in uids:
+            tasks.append(
+                asyncio.create_task(self.handle_challenge(self.metagraph.hotkeys[uid]))
+            )
+        responses = await asyncio.gather(*tasks)
 
-    # query all N (from redundancy factor) with M challenges (x% of the total data)
-    # TODO: see who returns the data fastest (passes verification), and rank them highest
-    responses = await dendrite(
-        axons_to_query,
-        protocol.Retrieve(
-            data_hash=data_hash,
-            seed=get_random_bytes(32).hex(),
-        ),
-        deserialize=True,
-    )
+        # Compute the rewards for the responses given the prompt.
+        rewards: torch.FloatTensor = torch.zeros(
+            len(responses), dtype=torch.float32
+        ).to(self.device)
 
-    for response in responses:
-        print("response:", response)
-        decoded_data = base64.b64decode(respnonse.data)
-        if hash_data(decoded_data) != data_hash:
-            print("data hash does not match!")
-            continue
+        # Set 0 weight if unverified
+        for uid, (verified, response) in zip(uids, responses):
+            if verified:
+                rewards[uid] = 1.0
+            else:
+                rewards[uid] = 0.0
 
-        if not verify_retrieve_with_seed(rdata):
-            print("data verification failed!")
-            continue
+        self.apply_reward_scores(uids, responses, rewards)
 
-        # Decrypt the data using the validator stored encryption keys
-        data = decrypt_aes_gcm(
-            decoded_data,
-            bytes.fromhex(data["encryption_key"]),
-            bytes.fromhex(data["encryption_nonce"]),
-            bytes.fromhex(data["encryption_tag"]),
+    async def retrieve(self, data_hash):
+        # fetch which miners have the data
+        keys = safe_key_search(self.database, f"{data_hash}.*")
+
+        uids = []
+        axons_to_query = []
+        for key in keys:
+            hotkey = key.split(".")[1]
+            uid = metagraph.hotkeys.index(hotkey)
+            axons_to_query.append(metagraph.axons[uid])
+            uids.append(uid)
+            bt.logging.debug(f"appending hotkey: {hotkey}")
+
+        uid_axon_map = {uid: axon for uid, axon in zip(uids, axons_to_query)}
+
+        # query all N (from redundancy factor) with M challenges (x% of the total data)
+        # see who returns the data fastest (passes verification), and rank them highest
+        responses = await dendrite(
+            axons_to_query,
+            protocol.Retrieve(
+                data_hash=data_hash,
+                seed=get_random_bytes(32).hex(),
+            ),
+            deserialize=True,
         )
 
-        # TODO: return this to the user
+        rewards: torch.FloatTensor = torch.zeros(
+            len(responses), dtype=torch.float32
+        ).to(self.device)
 
+        datas = []
+        for idx, response in enumerate(responses):
+            bt.logging.debug(f"response: {response}")
+            decoded_data = base64.b64decode(respnonse.data)
+            if hash_data(decoded_data) != data_hash:
+                bt.logging.error(f"Hash of received data does not match expected hash!")
+                continue
 
-# Step 2: Set up the configuration parser
-# This function is responsible for setting up and parsing command-line arguments.
-def get_config():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--alpha", default=0.9, type=float, help="The weight moving average scoring."
-    )
-    # TODO(developer): Adds your custom validator arguments to the parser.
-    parser.add_argument(
-        "--curve",
-        default="P-256",
-        help="Curve for elliptic curve cryptography.",
-        choices=["P-256"],  # TODO: expand this list
-    )
-    parser.add_argument(
-        "--maxsize",
-        default=128,
-        type=int,
-        help="Maximum size of random data to store.",
-    )
-    parser.add_argument(
-        "--redundancy",
-        type=int,
-        default=3,
-        help="Number of miners to store each piece of data on.",
-    )
-    parser.add_argument(
-        "--databse_host", default="localhost", help="The host of the redis database."
-    )
-    parser.add_argument(
-        "--databse_port", default=6379, help="The port of the redis database."
-    )
-    parser.add_argument(
-        "--databse_index", default=0, help="The database number of the redis database."
-    )
-    parser.add_argument("--netuid", type=int, default=1, help="The chain subnet uid.")
-    bt.subtensor.add_args(parser)
-    bt.logging.add_args(parser)
-    bt.wallet.add_args(parser)
-    config = bt.config(parser)
+            if not verify_retrieve_with_seed(response):
+                bt.logging.error(f"data verification failed! {response}")
+                rewards[idx] = -1.0  # Losing use data is unacceptable, harsh punishment
+                continue  # skip trying to decode the data
+            else:
+                rewards[idx] = 1.0
 
-    config.full_path = os.path.expanduser(
-        "{}/{}/{}/netuid{}/{}".format(
-            config.logging.logging_dir,
-            config.wallet.name,
-            config.wallet.hotkey,
-            config.netuid,
-            "validator",
-        )
-    )
-    # Ensure the logging directory exists.
-    if not os.path.exists(config.full_path):
-        os.makedirs(config.full_path, exist_ok=True)
+            try:
+                bt.logging.debug(f"Decrypting from UID: {uids[idx]}")
+                # Decrypt the data using the validator stored encryption keys
+                decrypted_data = decrypt_data(decoded_data, data["encryption_payload"])
+                datas.append(decrypted_data)
+            except Exception as e:
+                bt.logging.error(f"Failed to decrypt data from UID: {uids[idx]} {e}")
 
-    # Return the parsed config.
-    return config
+            # TODO: get a temp link from the server to send back to the client
 
+        self.apply_reward_scores(uids, responses, rewards)
 
-def main(config):
-    # Set up logging with the provided configuration and directory.
-    bt.logging(config=config, logging_dir=config.full_path)
-    bt.logging.info(
-        f"Running validator for subnet: {config.netuid} on network: {config.subtensor.chain_endpoint} with config:"
-    )
-    # Log the configuration for reference.
-    bt.logging.info(config)
+        return datas[
+            0
+        ]  # Return only first element of data, incase only 1 response is valid
 
-    # Step 4: Build Bittensor validator objects
-    # These are core Bittensor classes to interact with the network.
-    bt.logging.info("Setting up bittensor objects.")
+    async def forward(self) -> torch.Tensor:
+        self.counter += 1
+        bt.logging.info(f"forward() {self.counter}")
 
-    # The wallet holds the cryptographic key pairs for the validator.
-    wallet = bt.wallet(config=config)
-    bt.logging.info(f"Wallet: {wallet}")
-
-    # The subtensor is our connection to the Bittensor blockchain.
-    subtensor = bt.subtensor(config=config)
-    bt.logging.info(f"Subtensor: {subtensor}")
-
-    # Dendrite is the RPC client; it lets us send messages to other nodes (axons) in the network.
-    dendrite = bt.dendrite(wallet=wallet)
-    bt.logging.info(f"Dendrite: {dendrite}")
-
-    # The metagraph holds the state of the network, letting us know about other validators and miners.
-    metagraph = subtensor.metagraph(config.netuid)
-    bt.logging.info(f"Metagraph: {metagraph}")
-
-    # Step 5: Connect the validator to the network
-    if wallet.hotkey.ss58_address not in metagraph.hotkeys:
-        bt.logging.error(
-            f"\nYour validator: {wallet} if not registered to chain connection: {subtensor} \nRun btcli register and try again."
-        )
-        exit()
-
-    # Setup database
-    database = redis.StrictRedis(
-        host=config.database_host, port=config.database_port, db=config.database_index
-    )
-
-    # Setup axon for broadcasting
-    axon = bt.axon(wallet=wallet, config=config)
-    bt.logging.info(f"Axon: {axon}")
-
-    # attach the update function to the axon
-    axon.attach(
-        forward_fn=update_index,
-    )
-
-    # Each validator gets a unique identity (UID) in the network for differentiation.
-    my_subnet_uid = metagraph.hotkeys.index(wallet.hotkey.ss58_address)
-    bt.logging.info(f"Running validator on uid: {my_subnet_uid}")
-
-    # Step 6: Set up initial scoring weights for validation
-    bt.logging.info("Building validation weights.")
-    scores = torch.ones_like(metagraph.S, dtype=torch.float32)
-    bt.logging.info(f"Weights: {scores}")
-    # Step 7: The Main Validation Loop
-    bt.logging.info("Starting validator loop.")
-    step = 0
-    while True:
+    def run(self):
+        bt.logging.info("run()")
+        load_state(self)
+        checkpoint(self)
         try:
-            # Setup CRS for this round of validation
-            g, h = setup_CRS(curve=config.curve)
+            while True:
+                if not self.wallet.hotkey.ss58_address in self.metagraph.hotkeys:
+                    raise Exception(
+                        f"Validator is not registered - hotkey {self.wallet.hotkey.ss58_address} not in metagraph"
+                    )
 
-            # Make a random bytes file to test the miner
-            random_data = make_random_file(maxsize=config.maxsize)
+                bt.logging.info(f"step({self.step}) block({ttl_get_block( self )})")
 
-            # Encrypt the data
-            encrypted_data, nonce, tag = encrypt_data(
-                random_data,
-                wallet.hotkey.secret,  # TODO: Use validator key as the encryption key?
-            )
+                # Run multiple forwards.
+                async def run_forward():
+                    coroutines = [
+                        self.forward()
+                        for _ in range(self.config.neuron.num_concurrent_forwards)
+                    ]
+                    await asyncio.gather(*coroutines)
 
-            # Convert to base64 for compactness
-            b64_encrypted_data = base64.b64encode(encrypted_data).decode("utf-8")
+                self.loop.run_until_complete(run_forward())
 
-            # Hash the encrypted data
-            data_hash = hash_data(encrypted_data)
+                # Resync the network state
+                if should_checkpoint(self):
+                    checkpoint(self)
 
-            # Chunk the data
-            chunksize = get_random_chunksize()
-            # chunks = list(chunk_data(encrypted_data, chunksize))
+                # Set the weights on chain.
+                if should_set_weights(self):
+                    set_weights(self)
+                    save_state(self)
 
-            # Broadcast a query to all miners on the network.
-            responses = dendrite.query(
-                metagraph.axons,
-                protocol.Store(
-                    chunksize=chunksize,
-                    encrypted_data=b64_encrypted_data,
-                    data_hash=data_hash,
-                    curve=config.curve,
-                    g=ecc_point_to_hex(g),
-                    h=ecc_point_to_hex(h),
-                    size=sys.getsizeof(encrypted_data),
-                ),
-                deserialize=True,
-            )
+                # Rollover wandb to a new run.
+                if should_reinit_wandb(self):
+                    reinit_wandb(self)
 
-            # TODO: Store data params in Redis or GUNdb
-            setup_params = {
-                "g": g,
-                "h": h,
-                "curve": config.curve,
-            }
-
-            # Log the results for monitoring purposes.
-            bt.logging.info(f"Received responses: {responses}")
-
-            # TODO(developer): Define how the validator scores responses.
-            # Adjust the scores based on responses from miners.
-            for i, resp_i in enumerate(responses):
-                # Check if the miner has provided the correct response by doubling the dummy input.
-                # If correct, set their score for this round to 1. Otherwise, set it to 0.
-                score = template.reward.dummy(step, resp_i)
-
-                # Update the global score of the miner.
-                # This score contributes to the miner's weight in the network.
-                # A higher weight means that the miner has been consistently responding correctly.
-                scores[i] = config.alpha * scores[i] + (1 - config.alpha) * score
-
-            bt.logging.info(f"Scores: {scores}")
-            # Periodically update the weights on the Bittensor blockchain.
-            if (step + 1) % 10 == 0:
-                # TODO(developer): Define how the validator normalizes scores before setting weights.
-                weights = torch.nn.functional.normalize(scores, p=1.0, dim=0)
-                bt.logging.info(f"Setting weights: {weights}")
-                # This is a crucial step that updates the incentive mechanism on the Bittensor blockchain.
-                # Miners with higher scores (or weights) receive a larger share of TAO rewards on this subnet.
-                result = subtensor.set_weights(
-                    netuid=config.netuid,  # Subnet to set weights on.
-                    wallet=wallet,  # Wallet to sign set weights using hotkey.
-                    uids=metagraph.uids,  # Uids of the miners to set weights for.
-                    weights=weights,  # Weights to set for the miners.
-                    wait_for_inclusion=True,
-                )
-                if result:
-                    bt.logging.success("Successfully set weights.")
-                else:
-                    bt.logging.error("Failed to set weights.")
-
-            # End the current step and prepare for the next iteration.
-            step += 1
-            # Resync our local state with the latest state from the blockchain.
-            metagraph = subtensor.metagraph(config.netuid)
-            # Sleep for a duration equivalent to the block time (i.e., time between successive blocks).
-            time.sleep(bt.__blocktime__)
-
-        # If we encounter an unexpected error, log it for debugging.
-        except RuntimeError as e:
-            bt.logging.error(e)
-            traceback.print_exc()
-
-        # If the user interrupts the program, gracefully exit.
-        except KeyboardInterrupt:
-            bt.logging.success("Keyboard interrupt detected. Exiting validator.")
-            exit()
+                self.prev_block = ttl_get_block(self)
+                self.step += 1
+        except Exception as err:
+            bt.logging.error("Error in training loop", str(err))
+            bt.logging.debug(print_exception(type(err), err, err.__traceback__))
 
 
-# The main function parses the configuration and runs the validator.
+def main():
+    neuron().run()
+
+
 if __name__ == "__main__":
-    # Parse the configuration.
-    config = get_config()
-    # Run the main function.
-    main(config)
+    main()
