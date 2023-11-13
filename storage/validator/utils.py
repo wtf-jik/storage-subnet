@@ -152,7 +152,6 @@ def scale_rewards_by_response_time(uids, responses, rewards):
     for i, uid in enumerate(uids):
         rewards[i] *= uid_to_normalized_score.get(uid, 0)
 
-
     return rewards
 
 

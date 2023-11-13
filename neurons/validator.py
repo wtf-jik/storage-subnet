@@ -597,7 +597,9 @@ class neuron:
         Asynchronously challenge and see who returns the data fastest (passes verification), and rank them highest
         """
         tasks = []
-        uids = [17, 26, 27]  # self.get_random_uids(k=self.config.neuron.challenge_k)
+        uids = self.get_random_uids(
+            k=min(self.metagraph.n, self.config.neuron.challenge_k)
+        )
         for uid in uids:
             tasks.append(asyncio.create_task(self.handle_challenge(uid)))
         responses = await asyncio.gather(*tasks)
@@ -607,7 +609,6 @@ class neuron:
             len(responses), dtype=torch.float32
         ).to(self.device)
         bt.logging.debug(f"Init challenge rewards: {rewards}")
-        # Set 0 weight if unverified
         # TODO: check and see if we have a dummy synapse (e.g. no data found, shouldn't penalize)
 
         for idx, (uid, (verified, response)) in enumerate(zip(uids, responses)):
@@ -698,15 +699,16 @@ class neuron:
             else:
                 rewards[idx] = 1.0
 
-            # If we reach here, this miner has passed verification. Update the validator storage.
-            data["prev_seed"] = synapse.seed
-            data["counter"] += 1
-            update_metadata_for_data_hash(hotkey, data_hash, data, self.database)
-
             try:
                 bt.logging.debug(f"Decrypting from UID: {uids[idx]}")
+
                 # Load the data for this miner from validator storage
                 data = get_metadata_from_hash(hotkey, data_hash, self.database)
+
+                # If we reach here, this miner has passed verification. Update the validator storage.
+                data["prev_seed"] = synapse.seed
+                data["counter"] += 1
+                update_metadata_for_data_hash(hotkey, data_hash, data, self.database)
 
                 # TODO: Add this decryption on the miner side provided the user logs in
                 # with their wallet! This way miners can send back a landing/login link
@@ -732,22 +734,33 @@ class neuron:
     async def forward(self) -> torch.Tensor:
         self.step += 1
         bt.logging.info(f"forward() {self.step}")
-        # await self.store_validator_data()
-        await self.challenge()
-        time.sleep(12)
 
-        # Store some data
-        bt.logging.trace("initiating store data")
-        await self.store_validator_data()
+        try:
+            # Store some data
+            bt.logging.trace("initiating store data")
+            await self.store_validator_data()
+        except Exception as e:
+            bt.logging.error(f"Failed to store data with exception: {e}")
+            pass
 
-        # Challenge some data
-        bt.logging.trace("initiating challenge")
-        await self.challenge()
+        try:
+            # Challenge some data
+            bt.logging.trace("initiating challenge")
+            await self.challenge()
+        except Exception as e:
+            bt.logging.error(f"Failed to challenge data with exception: {e}")
+            pass
 
         if self.step % 3 == 0:
-            # Retrieve some data
-            bt.logging.trace("initiating retrieve")
-            await self.retrieve()
+            try:
+                # Retrieve some data
+                bt.logging.trace("initiating retrieve")
+                await self.retrieve()
+            except Exception as e:
+                bt.logging.error(f"Failed to retrieve data with exception: {e}")
+                pass
+
+        # TODO: set weights on chain at the end of the epoch (define an epoch length)
 
         time.sleep(12)
 
