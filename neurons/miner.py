@@ -38,6 +38,8 @@ from Crypto.Random import get_random_bytes
 
 from pprint import pprint, pformat
 
+from test_miner import test
+
 # import this repo
 import storage
 from storage.shared.ecc import (
@@ -67,6 +69,7 @@ from storage.miner.utils import (
     compute_subsequent_commitment,
     save_data_to_filesystem,
     load_from_filesystem,
+    commit_data_with_seed,
 )
 
 from storage.miner.config import (
@@ -79,14 +82,39 @@ from storage.miner.config import (
 class miner:
     @classmethod
     def check_config(cls, config: "bt.Config"):
+        """
+        Adds neuron-specific arguments to the argument parser.
+
+        Args:
+            parser (argparse.ArgumentParser): Parser to add arguments to.
+
+        This class method enriches the argument parser with options specific to the neuron's configuration.
+        """
         check_config(cls, config)
 
     @classmethod
     def add_args(cls, parser):
+        """
+        Adds neuron-specific arguments to the argument parser.
+
+        Args:
+            parser (argparse.ArgumentParser): Parser to add arguments to.
+
+        This class method enriches the argument parser with options specific to the neuron's configuration.
+        """
         add_args(cls, parser)
 
     @classmethod
     def config(cls):
+        """
+        Retrieves the configuration for the neuron.
+
+        Returns:
+            bt.Config: The configuration object for the neuron.
+
+        This class method returns the neuron's configuration, which is used throughout the neuron's lifecycle
+        for various functionalities and operations.
+        """
         return config(cls)
 
     subtensor: "bt.subtensor"
@@ -136,9 +164,9 @@ class miner:
 
         # Setup database
         self.database = redis.StrictRedis(
-            host=self.config.database_host,
-            port=self.config.database_port,
-            db=self.config.database_index,
+            host=self.config.database.host,
+            port=self.config.database.port,
+            db=self.config.database.index,
         )
 
         self.my_subnet_uid = self.metagraph.hotkeys.index(
@@ -174,13 +202,7 @@ class miner:
         # Serve passes the axon information to the network + netuid we are hosting on.
         # This will auto-update if the axon port of external ip have changed.
         bt.logging.info(
-            f"Serving axon {self.store} on network: {self.subtensor.chain_endpoint} with netuid: {self.config.netuid}"
-        )
-        bt.logging.info(
-            f"Serving axon {self.challenge} on network: {self.subtensor.chain_endpoint} with netuid: {self.config.netuid}"
-        )
-        bt.logging.info(
-            f"Serving axon {self.retrieve} on network: {self.subtensor.chain_endpoint} with netuid: {self.config.netuid}"
+            f"Serving axon {self.axon} on network: {self.subtensor.chain_endpoint} with netuid: {self.config.netuid}"
         )
         self.axon.serve(netuid=self.config.netuid, subtensor=self.subtensor)
 
@@ -200,8 +222,25 @@ class miner:
 
         self.step = 0
 
+        if self.config.test:  # (debugging)
+            test(self)
+            exit(0)
+
     @property
     def total_storage(self):
+        """
+        Calculates the total size of data stored by the miner.
+
+        This method fetches all data keys from the Redis database and sums up the size of each data object.
+        It provides an estimate of the total amount of data currently held by the miner.
+
+        Returns:
+            int: Total size of data (in bytes) stored by the miner.
+
+        Example:
+            >>> miner.total_storage()
+            102400  # Example output indicating 102,400 bytes of data stored
+        """
         # Fetch all keys from Redis
         all_keys = safe_key_search(database, "*")
 
@@ -248,6 +287,19 @@ class miner:
 
     # This is the core miner function, which decides the miner's response to a valid, high-priority request.
     def store(self, synapse: storage.protocol.Store) -> storage.protocol.Store:
+        """
+        Handles storing data requested by a synapse.
+
+        This method commits to the entire data block provided by the synapse, stores it in the filesystem,
+        and updates the Redis database with metadata about the stored data. It also generates a commitment
+        proof to send back to the requesting entity as evidence of storage.
+
+        Args:
+            synapse (storage.protocol.Store): The Store synapse containing the data to be stored and associated metadata.
+
+        Returns:
+            storage.protocol.Store: The updated synapse with commitment proof and other storage details.
+        """
         # Decode the data from base64 to raw bytes
         encrypted_byte_data = base64.b64decode(synapse.encrypted_data)
 
@@ -301,6 +353,19 @@ class miner:
     def challenge(
         self, synapse: storage.protocol.Challenge
     ) -> storage.protocol.Challenge:
+        """
+        Responds to a challenge request by proving possession of the requested data chunk.
+
+        This method fetches and chunks the data requested in the synapse. It computes the commitment to the data chunk
+        based on the provided curve points and returns the chunk along with a merkle proof, root, and commitment
+        as evidence of possession.
+
+        Args:
+            synapse (storage.protocol.Challenge): The Challenge synapse containing parameters for the data challenge.
+
+        Returns:
+            storage.protocol.Challenge: The updated synapse with the response to the data challenge.
+        """
         # Retrieve the data itself from miner storage
         bt.logging.debug(f"challenge hash: {synapse.challenge_hash}")
         data = self.database.get(synapse.challenge_hash)
@@ -373,6 +438,19 @@ class miner:
         return synapse
 
     def retrieve(self, synapse: storage.protocol.Retrieve) -> storage.protocol.Retrieve:
+        """
+        Retrieves data based on a given hash from the miner's storage.
+
+        This method looks up the requested data in the Redis database using the provided hash. It then loads
+        the data from the filesystem and includes a final seed challenge to verify continued possession
+        of the data at retrieval time.
+
+        Args:
+            synapse (storage.protocol.Retrieve): The Retrieve synapse containing the hash of the data to be retrieved.
+
+        Returns:
+            storage.protocol.Retrieve: The updated synapse with the retrieved data and additional verification information.
+        """
         # Fetch the data from the miner database
         data = self.database.get(synapse.data_hash)
         bt.logging.debug("retireved data:", data)
@@ -402,19 +480,6 @@ class miner:
         # Return base64 data
         synapse.data = base64.b64encode(encrypted_data_bytes)
         return synapse
-
-        if config.test:  # (debugging)
-            import random
-            from storage.utils import (
-                GetSynapse,
-                verify_store_with_seed,
-                verify_challenge_with_seed,
-                verify_retrieve_with_seed,
-                get_random_chunksize,
-                decrypt_aes_gcm,
-            )
-
-            test(self)
 
     def run(self):
         run(self)
@@ -467,6 +532,12 @@ class miner:
 
 
 def main():
+    """
+    Main function to run the neuron.
+
+    This function initializes and runs the neuron. It handles the main loop, state management, and interaction
+    with the Bittensor network.
+    """
     miner().run()
 
 
