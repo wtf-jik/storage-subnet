@@ -1,6 +1,7 @@
 import os
 import sys
 import copy
+import json
 import time
 import redis
 import torch
@@ -12,7 +13,7 @@ import traceback
 import bittensor as bt
 from traceback import print_exception
 from random import choice as random_choice
-from Crypto.Random import get_random_bytes
+from Crypto.Random import get_random_bytes, random
 
 from storage import protocol
 
@@ -32,6 +33,26 @@ from storage.shared.utils import (
     b64_encode,
     b64_decode,
     chunk_data,
+    safe_key_search,
+)
+
+from storage.validator.utils import (
+    make_random_file,
+    get_random_chunksize,
+    select_subset_uids,
+    scale_rewards_by_response_time,
+    check_uid_availability,
+)
+
+from storage.validator.encryption import (
+    decrypt_data,
+    encrypt_data,
+)
+
+from storage.validator.verify import (
+    verify_store_with_seed,
+    verify_challenge_with_seed,
+    verify_retrieve_with_seed,
 )
 
 
@@ -91,6 +112,7 @@ class neuron:
         # Init wallet.
         bt.logging.debug("loading", "wallet")
         self.wallet = bt.wallet(config=self.config)
+        self.wallet.coldkey  # Unlock for testing
         self.wallet.create_if_non_existent()
         if not self.config.wallet._mock:
             if not self.subtensor.is_hotkey_registered_on_subnet(
@@ -209,13 +231,18 @@ class neuron:
         # Scale reward by the ranking of the response time
         # If the response time is faster, the reward is higher
         # This should reflect the distribution of axon response times (minmax norm)
+        bt.logging.debug(f"Applying rewards: {rewards}")
+        bt.logging.debug(f"Reward shape: {rewards.shape}")
+        bt.logging.debug(f"UIDs: {uids}")
         scaled_rewards = scale_rewards_by_response_time(uids, responses, rewards)
+        bt.logging.debug(f"Scaled rewards: {scaled_rewards}")
 
         # Compute forward pass rewards, assumes followup_uids and answer_uids are mutually exclusive.
         # shape: [ metagraph.n ]
         scattered_rewards: torch.FloatTensor = self.moving_averaged_scores.scatter(
-            0, uids, scaled_rewards
+            0, torch.tensor(uids).to(self.device), scaled_rewards
         ).to(self.device)
+        bt.logging.debug(f"Scattered rewards: {scattered_rewards}")
 
         # Update moving_averaged_scores with rewards produced by this step.
         # shape: [ metagraph.n ]
@@ -223,6 +250,7 @@ class neuron:
         self.moving_averaged_scores: torch.FloatTensor = alpha * scattered_rewards + (
             1 - alpha
         ) * self.moving_averaged_scores.to(self.device)
+        bt.logging.debug(f"Updated moving avg scores: {self.moving_averaged_scores}")
 
     def update_index(self, synapse: protocol.Update):
         """Update the validator index with the new data"""
@@ -287,18 +315,18 @@ class neuron:
 
     async def store_user_data(self, data: bytes, wallet: bt.wallet):
         # Store user data with the user's wallet as encryption key
-        return store_data(data=data, wallet=wallet)
+        return await self.store_data(data=data, wallet=wallet)
 
-    async def store_validator_data(self, data: bytes):
+    async def store_validator_data(self, data: bytes = None):
         # Store random data using the validator's pubkey as the encryption key
-        return store_data(wallet=self.wallet)
+        return await self.store_data(data=data, wallet=self.wallet)
 
     async def store_data(self, data: bytes = None, wallet: bt.wallet = None):
         # Setup CRS for this round of validation
-        g, h = setup_CRS(curve=self.config.curve)
+        g, h = setup_CRS(curve=self.config.neuron.curve)
 
         # Make a random bytes file to test the miner if none provided
-        data = data or make_random_file(maxsize=self.config.maxsize)
+        data = data or make_random_file(maxsize=self.config.neuron.maxsize)
 
         # Encrypt the data
         encrypted_data, encryption_payload = encrypt_data(data, wallet)
@@ -308,14 +336,14 @@ class neuron:
 
         synapse = protocol.Store(
             encrypted_data=b64_encrypted_data,
-            curve=curve,
+            curve=self.config.neuron.curve,
             g=ecc_point_to_hex(g),
             h=ecc_point_to_hex(h),
             seed=get_random_bytes(32).hex(),  # 256-bit seed
         )
 
         # Select subset of miners to query (e.g. redunancy factor of N)
-        uids = select_subset_uids(metagraph.uids, N=self.config.redundancy)
+        uids = [17, 26, 27]  # self.get_random_uids(k=self.config.neuron.redundancy)
         axons = [self.metagraph.axons[uid] for uid in uids]
         retry_uids = [None]
 
@@ -339,11 +367,14 @@ class neuron:
             rewards: torch.FloatTensor = torch.zeros(
                 len(responses), dtype=torch.float32
             ).to(self.device)
+            bt.logging.debug(f"Init rewards: {rewards}")
 
             for idx, (uid, response) in enumerate(zip(uids, responses)):
                 # Verify the commitment
-                if not verify_challenge_with_seed(response):
-                    # TODO: flag this miner for 0 weight (or negative rewards?)
+                if not verify_store_with_seed(response):
+                    bt.logging.debug(
+                        f"Failed to verify store commitment from UID: {uid}"
+                    )
                     rewards[idx] = 0.0
                     retry_uids.append(uid)
                     continue  # Skip trying to store the data
@@ -363,36 +394,47 @@ class neuron:
                 dumped_data = json.dumps(response_storage).encode()
 
                 # Store in the database according to the data hash and the miner hotkey
-                database.set(key, dumped_data)
+                self.database.set(key, dumped_data)
                 bt.logging.debug(f"Stored data in database with key: {key}")
 
                 # Broadcast the update to all other validators
                 # TODO: ensure this will not block
                 # TODO: potentially batch update after all miners have responded?
-                broadcast(key, dumped_data)
+                bt.logging.trace(f"Broadcasting update to all validators")
+                self.broadcast(key, dumped_data)
 
+            bt.logging.trace("Applying rewards")
             self.apply_reward_scores(uids, responses, rewards)
 
             # Get a new set of UIDs to query for those left behind
             if retry_uids != []:
-                uids = select_subset_uids(metagraph.uids, N=len(retry_uids))
+                bt.logging.debug(f"Failed to store on uids: {retry_uids}")
+                uids = [17, 26, 27]  # self.get_random_uids(k=len(retry_uids))
                 bt.logging.debug(f"Retrying with new uids: {uids}")
-                axons = [metagraph.axons[uid] for uid in uids]
+                axons = [self.metagraph.axons[uid] for uid in uids]
                 retry_uids = []  # reset retry uids
                 retries += 1
 
     async def handle_challenge(
-        self, hotkey: str
+        self, uid: int
     ) -> typing.Tuple[bool, protocol.Challenge]:
+        """Handle a challenge from a miner"""
+        hotkey = self.metagraph.hotkeys[uid]
+        bt.logging.debug(f"Handling challenge from hotkey: {hotkey}")
         keys = safe_key_search(self.database, f"*.{hotkey}")
+        bt.logging.debug(f"Challenge lookup keys: {keys}")
         key = random.choice(keys)
-        data_hash = key.split(".")[0]
+        bt.logging.debug(f"Challenge lookup key: {key}")
+        data_hash = key.decode("utf-8").split(".")[0]
 
         data = json.loads(self.database.get(key).decode("utf-8"))
+        bt.logging.debug(f"Challenge data: {data}")
         chunk_size = (
             get_random_chunksize(data["size"]) // self.config.neuron.chunk_factor
         )
+        bt.logging.debug(f"chunk size {chunk_size}")
         num_chunks = data["size"] // chunk_size
+        bt.logging.debug(f"num chunks {num_chunks}")
         g, h = setup_CRS()
 
         synapse = protocol.Challenge(
@@ -412,8 +454,8 @@ class neuron:
             synapse,
             deserialize=True,
         )
-
-        verified = verify_challenge_with_seed(response)
+        bt.logging.debug(f"Resposne from uid {uid} challenge: {response}")
+        verified = verify_challenge_with_seed(response[0])
 
         data["prev_seed"] = synapse.seed
         data["counter"] += 1
@@ -427,25 +469,28 @@ class neuron:
         # We create each challenge as a coroutine and then
         # await the results of each challenge asynchronously
         tasks = []
-        uids = self.get_random_uids(k=self.config.neuron.challenge_k)
+        uids = [17, 26, 27]  # self.get_random_uids(k=self.config.neuron.challenge_k)
         for uid in uids:
-            tasks.append(
-                asyncio.create_task(self.handle_challenge(self.metagraph.hotkeys[uid]))
-            )
+            tasks.append(asyncio.create_task(self.handle_challenge(uid)))
         responses = await asyncio.gather(*tasks)
-
+        bt.logging.debug(f"Challenge repsonses: {responses}")
         # Compute the rewards for the responses given the prompt.
         rewards: torch.FloatTensor = torch.zeros(
             len(responses), dtype=torch.float32
         ).to(self.device)
-
+        bt.logging.debug(f"Init challenge rewards: {rewards}")
         # Set 0 weight if unverified
-        for uid, (verified, response) in zip(uids, responses):
+        for idx, (uid, (verified, response)) in enumerate(zip(uids, responses)):
+            bt.logging.debug(
+                f"idx {idx} uid {uid} verified {verified} response {response}"
+            )
             if verified:
-                rewards[uid] = 1.0
+                rewards[idx] = 1.0
             else:
-                rewards[uid] = 0.0
+                rewards[idx] = 0.0
 
+        responses = [response[0] for (verified, response) in responses]
+        bt.logging.debug(f"responses after: {responses}")
         self.apply_reward_scores(uids, responses, rewards)
 
     async def retrieve(self, data_hash):
@@ -512,6 +557,9 @@ class neuron:
     async def forward(self) -> torch.Tensor:
         self.step += 1
         bt.logging.info(f"forward() {self.step}")
+        # await self.store_validator_data()
+        await self.challenge()
+        time.sleep(12)
 
     def run(self):
         bt.logging.info("run()")
