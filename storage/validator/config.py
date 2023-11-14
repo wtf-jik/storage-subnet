@@ -84,7 +84,7 @@ def add_args(cls, parser):
     )
     parser.add_argument(
         "--neuron.maxsize",
-        default=128,
+        default=2**16,
         type=int,
         help="Maximum size of random data to store.",
     )
@@ -96,19 +96,18 @@ def add_args(cls, parser):
     )
     parser.add_argument(
         "--neuron.override_chunk_size",
-        default=12,  # 64 bytes
+        default=24,
         type=int,
         help="Override random chunk size to split data into for challenges.",
     )
     parser.add_argument(
-        "--neuron.redundancy",
+        "--neuron.store_redundancy",
         type=int,
         default=3,
         help="Number of miners to store each piece of data on.",
     )
-
     parser.add_argument(
-        "--neuron.challenge_k",
+        "--neuron.challenge_sample_size",
         type=int,
         default=5,
         help="Number of miners to challenge at a time.",
@@ -120,12 +119,11 @@ def add_args(cls, parser):
         default=False,
     )
     parser.add_argument(
-        "-neuron.chunk_factor",
+        "--neuron.chunk_factor",
         type=int,
         help="The chunk factor to divide data.",
         default=4,
     )
-
     parser.add_argument(
         "--neuron.num_concurrent_forwards",
         type=int,
@@ -145,31 +143,40 @@ def add_args(cls, parser):
         default=0.05,
     )
     parser.add_argument(
-        "--neuron.followup_timeout",
+        "--neuron.store_timeout",
         type=float,
-        help="Follow up query timeout.",
+        help="Retreive data query timeout.",
         default=10,
     )
     parser.add_argument(
-        "--neuron.followup_sample_size",
-        type=int,
-        help="How many miners to query for the follow up prompt.",
-        default=50,
+        "--neuron.challenge_timeout",
+        type=float,
+        help="Retreive data query timeout.",
+        default=20,
     )
     parser.add_argument(
-        "--neuron.answer_timeout", type=float, help="Answer query timeout.", default=10
+        "--neuron.retrieve_timeout",
+        type=float,
+        help="Retreive data query timeout.",
+        default=50,
     )
     parser.add_argument(
         "--neuron.epoch_length_override",
         type=int,
         help="Override the default epoch length (how often we set weights).",
-        default=0,
+        default=5,
     )
     parser.add_argument(
         "--neuron.checkpoint_block_length",
         type=int,
         help="Blocks before a checkpoint is saved.",
         default=100,
+    )
+    parser.add_argument(
+        "--neuron.blocks_per_step",
+        type=int,
+        help="Blocks before a step is taken.",
+        default=2,
     )
     parser.add_argument(
         "--neuron.events_retention_size",
@@ -194,6 +201,12 @@ def add_args(cls, parser):
         type=int,
         help="The minimum number of TAO allowed to broadcast index updates to validator with a vpermit.",
         default=1000,
+    )
+    parser.add_argument(
+        "--neuron.verbose",
+        action="store_true",
+        help="If set, we will print verbose detailed logs.",
+        default=False,
     )
 
     # Redis arguments
