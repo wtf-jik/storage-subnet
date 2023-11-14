@@ -1,3 +1,21 @@
+# The MIT License (MIT)
+# Copyright © 2023 Yuma Rao
+# Copyright © 2023 philanthrope
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+# documentation files (the “Software”), to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
+# and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+# The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+# the Software.
+
+# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+# THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
 import os
 import torch
 import argparse
@@ -41,6 +59,8 @@ def check_config(cls, config: "bt.Config"):
 
 
 def add_args(cls, parser):
+    parser.add_argument("--netuid", type=int, default=21, help="The chain subnet uid.")
+    parser.add_argument("--test", default=False, action="store_true")
     parser.add_argument(
         "--miner.name",
         type=str,
@@ -53,10 +73,8 @@ def add_args(cls, parser):
         help="Device to run the validator on.",
         default="cuda" if torch.cuda.is_available() else "cpu",
     )
+    parser.add_argument("--miner.verbose", default=False, action="store_true")
 
-    parser.add_argument("--netuid", type=int, default=21, help="The chain subnet uid.")
-    parser.add_argument("--verbose", default=False, action="store_true")
-    parser.add_argument("--test", default=False, action="store_true")
     parser.add_argument(
         "--database.host", default="localhost", help="The host of the redis database."
     )
@@ -120,18 +138,6 @@ def add_args(cls, parser):
         type=float,
         help="Minimum stake requirement",
         default=0.0,
-    )
-    parser.add_argument(
-        "--miner.blacklist.prompt_cache_block_span",
-        type=int,
-        help="Amount of blocks to keep a prompt in cache",
-        default=7200,
-    )
-    parser.add_argument(
-        "--miner.blacklist.use_prompt_cache",
-        action="store_true",
-        help="If True, the miner will use the prompt cache to store recent request prompts.",
-        default=False,
     )
     parser.add_argument(
         "--miner.blacklist.min_request_period",

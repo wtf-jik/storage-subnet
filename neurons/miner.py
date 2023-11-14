@@ -16,9 +16,6 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
-# Bittensor Miner Template:
-
-# Step 1: Import necessary libraries and modules
 import os
 import sys
 import copy
@@ -187,16 +184,16 @@ class miner:
         bt.logging.info(f"Attaching forward functions to axon.")
         self.axon.attach(
             forward_fn=self.store,
-            # blacklist_fn=blacklist_fn,
-            # priority_fn=priority_fn,
+            blacklist_fn=self.store_blacklist_fn,
+            priority_fn=self.store_priority_fn,
         ).attach(
             forward_fn=self.challenge,
-            # blacklist_fn=blacklist_fn,
-            # priority_fn=priority_fn,
+            blacklist_fn=self.challenge_blacklist_fn,
+            priority_fn=self.challenge_priority_fn,
         ).attach(
             forward_fn=self.retrieve,
-            # blacklist_fn=blacklist_fn,
-            # priority_fn=priority_fn,
+            blacklist_fn=self.retrieve_blacklist_fn,
+            priority_fn=self.retrieve_priority_fn,
         )
 
         # Serve passes the axon information to the network + netuid we are hosting on.
@@ -257,9 +254,31 @@ class miner:
         )
         return total_size
 
-    def blacklist_fn(
-        self, synapse: typing.Union[storage.protocol.Store, storage.protocol.Challenge]
+    def store_blacklist_fn(
+        self, synapse: storage.protocol.Store
     ) -> typing.Tuple[bool, str]:
+        """
+        Determines whether a given synapse should be blacklisted based on the recognition
+        of the hotkey in the metagraph. This function is used to filter out requests from
+        entities that are not part of the network's current state.
+
+        Parameters:
+        - synapse (bt.Synapse): The synapse object which contains the dendrite information
+        including the hotkey.
+
+        Returns:
+        - (bool, str): A tuple where the first element is a boolean indicating whether the
+        synapse's hotkey is blacklisted, and the second element is a string message explaining
+        the reason.
+
+        If the hotkey is not recognized in the metagraph, the synapse is blacklisted, and
+        the function returns (True, "Unrecognized hotkey"). Otherwise, it returns (False,
+        "Hotkey recognized!"), allowing the synapse to interact with the network.
+
+        Usage:
+        This method is internally used by the network to ensure that only recognized
+        entities can participate in communication or transactions.
+        """
         if synapse.dendrite.hotkey not in self.metagraph.hotkeys:
             # Ignore requests from unrecognized entities.
             bt.logging.trace(
@@ -271,9 +290,27 @@ class miner:
         )
         return False, "Hotkey recognized!"
 
-    def priority_fn(
-        self, synapse: typing.Union[storage.protocol.Store, storage.protocol.Challenge]
-    ) -> float:
+    def store_priority_fn(self, synapse: storage.protocol.Store) -> float:
+        """
+        Assigns a priority to a given synapse based on the stake of the calling entity
+        in the metagraph. This function is crucial for prioritizing network requests
+        and ensuring that higher-stake entities are given precedence in processing.
+
+        Parameters:
+        - synapse (bt.Synapse): The synapse object which contains the dendrite information
+        including the hotkey of the caller.
+
+        Returns:
+        - float: The priority value assigned to the synapse, derived from the stake of
+        the calling hotkey in the metagraph.
+
+        The priority is determined by the stake associated with the caller's UID in the
+        metagraph. A higher stake results in a higher priority.
+
+        Usage:
+        This method is used within the network's request handling mechanism to allocate
+        resources and processing time based on the stake-based priority of each request.
+        """
         caller_uid = self.metagraph.hotkeys.index(
             synapse.dendrite.hotkey
         )  # Get the caller index.
@@ -285,20 +322,172 @@ class miner:
         )
         return prirority
 
-    # This is the core miner function, which decides the miner's response to a valid, high-priority request.
-    def store(self, synapse: storage.protocol.Store) -> storage.protocol.Store:
+    def challenge_blacklist_fn(
+        self, synapse: storage.protocol.Challenge
+    ) -> typing.Tuple[bool, str]:
         """
-        Handles storing data requested by a synapse.
+        Determines whether a given synapse should be blacklisted based on the recognition
+        of the hotkey in the metagraph. This function is used to filter out requests from
+        entities that are not part of the network's current state.
 
-        This method commits to the entire data block provided by the synapse, stores it in the filesystem,
-        and updates the Redis database with metadata about the stored data. It also generates a commitment
-        proof to send back to the requesting entity as evidence of storage.
-
-        Args:
-            synapse (storage.protocol.Store): The Store synapse containing the data to be stored and associated metadata.
+        Parameters:
+        - synapse (bt.Synapse): The synapse object which contains the dendrite information
+        including the hotkey.
 
         Returns:
-            storage.protocol.Store: The updated synapse with commitment proof and other storage details.
+        - (bool, str): A tuple where the first element is a boolean indicating whether the
+        synapse's hotkey is blacklisted, and the second element is a string message explaining
+        the reason.
+
+        If the hotkey is not recognized in the metagraph, the synapse is blacklisted, and
+        the function returns (True, "Unrecognized hotkey"). Otherwise, it returns (False,
+        "Hotkey recognized!"), allowing the synapse to interact with the network.
+
+        Usage:
+        This method is internally used by the network to ensure that only recognized
+        entities can participate in communication or transactions.
+        """
+        if synapse.dendrite.hotkey not in self.metagraph.hotkeys:
+            # Ignore requests from unrecognized entities.
+            bt.logging.trace(
+                f"Blacklisting unrecognized hotkey {synapse.dendrite.hotkey}"
+            )
+            return True, "Unrecognized hotkey"
+        bt.logging.trace(
+            f"Not Blacklisting recognized hotkey {synapse.dendrite.hotkey}"
+        )
+        return False, "Hotkey recognized!"
+
+    def challenge_priority_fn(self, synapse: storage.protocol.Challenge) -> float:
+        """
+        Assigns a priority to a given synapse based on the stake of the calling entity
+        in the metagraph. This function is crucial for prioritizing network requests
+        and ensuring that higher-stake entities are given precedence in processing.
+
+        Parameters:
+        - synapse (bt.Synapse): The synapse object which contains the dendrite information
+        including the hotkey of the caller.
+
+        Returns:
+        - float: The priority value assigned to the synapse, derived from the stake of
+        the calling hotkey in the metagraph.
+
+        The priority is determined by the stake associated with the caller's UID in the
+        metagraph. A higher stake results in a higher priority.
+
+        Usage:
+        This method is used within the network's request handling mechanism to allocate
+        resources and processing time based on the stake-based priority of each request.
+        """
+        caller_uid = self.metagraph.hotkeys.index(
+            synapse.dendrite.hotkey
+        )  # Get the caller index.
+        prirority = float(
+            self.metagraph.S[caller_uid]
+        )  # Return the stake as the priority.
+        bt.logging.trace(
+            f"Prioritizing {synapse.dendrite.hotkey} with value: ", prirority
+        )
+        return prirority
+
+    def retrieve_blacklist_fn(
+        self, synapse: storage.protocol.Retrieve
+    ) -> typing.Tuple[bool, str]:
+        """
+        Determines whether a given synapse should be blacklisted based on the recognition
+        of the hotkey in the metagraph. This function is used to filter out requests from
+        entities that are not part of the network's current state.
+
+        Parameters:
+        - synapse (bt.Synapse): The synapse object which contains the dendrite information
+        including the hotkey.
+
+        Returns:
+        - (bool, str): A tuple where the first element is a boolean indicating whether the
+        synapse's hotkey is blacklisted, and the second element is a string message explaining
+        the reason.
+
+        If the hotkey is not recognized in the metagraph, the synapse is blacklisted, and
+        the function returns (True, "Unrecognized hotkey"). Otherwise, it returns (False,
+        "Hotkey recognized!"), allowing the synapse to interact with the network.
+
+        Usage:
+        This method is internally used by the network to ensure that only recognized
+        entities can participate in communication or transactions.
+        """
+        if synapse.dendrite.hotkey not in self.metagraph.hotkeys:
+            # Ignore requests from unrecognized entities.
+            bt.logging.trace(
+                f"Blacklisting unrecognized hotkey {synapse.dendrite.hotkey}"
+            )
+            return True, "Unrecognized hotkey"
+        bt.logging.trace(
+            f"Not Blacklisting recognized hotkey {synapse.dendrite.hotkey}"
+        )
+        return False, "Hotkey recognized!"
+
+    def retrieve_priority_fn(self, synapse: storage.protocol.Retrieve) -> float:
+        """
+        Assigns a priority to a given synapse based on the stake of the calling entity
+        in the metagraph. This function is crucial for prioritizing network requests
+        and ensuring that higher-stake entities are given precedence in processing.
+
+        Parameters:
+        - synapse (bt.Synapse): The synapse object which contains the dendrite information
+        including the hotkey of the caller.
+
+        Returns:
+        - float: The priority value assigned to the synapse, derived from the stake of
+        the calling hotkey in the metagraph.
+
+        The priority is determined by the stake associated with the caller's UID in the
+        metagraph. A higher stake results in a higher priority.
+
+        Usage:
+        This method is used within the network's request handling mechanism to allocate
+        resources and processing time based on the stake-based priority of each request.
+        """
+        caller_uid = self.metagraph.hotkeys.index(
+            synapse.dendrite.hotkey
+        )  # Get the caller index.
+        prirority = float(
+            self.metagraph.S[caller_uid]
+        )  # Return the stake as the priority.
+        bt.logging.trace(
+            f"Prioritizing {synapse.dendrite.hotkey} with value: ", prirority
+        )
+        return prirority
+
+    def store(self, synapse: storage.protocol.Store) -> storage.protocol.Store:
+        """
+        Processes the storage request from a synapse by securely storing the provided data and returning
+        a proof of storage. The data is committed using elliptic curve cryptography, stored on the filesystem,
+        and the metadata is recorded in a Redis database. A cryptographic proof of the commitment, along with
+        a digital signature from the server's hotkey, is returned in the synapse for verification by the requester.
+
+        Args:
+            synapse (storage.protocol.Store): An object containing the data to be stored,
+            encoded in base64 format, along with associated metadata like the cryptographic
+            curve parameters, a seed for the commitment, and the expected commitment group elements.
+
+        Returns:
+            storage.protocol.Store: The synapse is returned with additional fields populated,
+            including the randomness used in the commitment, the commitment point itself, a signature
+            from this storage server's hotkey, and a commitment hash that can be used for chained proofs.
+
+        The method performs the following operations:
+        1. Decodes the base64-encoded data into raw bytes.
+        2. Commits to the data using the provided elliptic curve parameters and the seed to generate a commitment point.
+        3. Stores the raw byte data in the filesystem using a hash of the data as the filename.
+        4. Records metadata about the stored data in the Redis database, including the file path, previous seed, and data size.
+        5. Updates the synapse object with the commitment details and a digital signature.
+
+        This process ensures the integrity and non-repudiation of the data storage, allowing clients to verify
+        that their data has been stored correctly without the need to retrieve the full data set.
+
+        Example usage:
+            Assuming an initialized 'committer' object and 'synapse' with necessary data:
+            >>> updated_synapse = self.store(synapse)
         """
         # Decode the data from base64 to raw bytes
         encrypted_byte_data = base64.b64decode(synapse.encrypted_data)
@@ -317,11 +506,10 @@ class miner:
 
         # Store the data with the hash as the key in the filesystem
         data_hash = hash_data(encrypted_byte_data)
-        bt.logging.debug(f"data_hash: {data_hash}")
         filepath = save_data_to_filesystem(
             encrypted_byte_data, self.config.database.directory, str(data_hash)
         )
-        bt.logging.debug(f"stored data in filepath: {filepath}")
+        bt.logging.debug(f"stored data {data_hash} in filepath: {filepath}")
         miner_store = {
             "filepath": filepath,
             "prev_seed": str(synapse.seed),
@@ -332,7 +520,7 @@ class miner:
         dumped = json.dumps(miner_store).encode()
         bt.logging.debug(f"dumped: {dumped}")
         self.database.set(data_hash, dumped)
-        bt.logging.debug(f"set in database!")
+        bt.logging.trace(f"set {data_hash} in database!")
 
         # Send back some proof that we stored the data
         synapse.randomness = r
@@ -340,12 +528,12 @@ class miner:
 
         # NOTE: Does this add anything of value?
         synapse.signature = self.wallet.hotkey.sign(str(m_val)).hex()
-        bt.logging.debug(f"signed m_val: {synapse.signature.hex()}")
+        bt.logging.trace(f"signed m_val: {synapse.signature.hex()}")
 
-        # CONCAT METHOD INITIAlIZE CHAIN
-        print(f"type(seed): {type(synapse.seed)}")
+        # Initialize the commitment hash with the initial commitment for chained proofs
+        bt.logging.trace(f"type(seed): {type(synapse.seed)}")
         synapse.commitment_hash = str(m_val)
-        bt.logging.debug(f"initial commitment_hash: {synapse.commitment_hash}")
+        bt.logging.trace(f"initial commitment_hash: {synapse.commitment_hash}")
 
         bt.logging.debug(f"returning synapse: {synapse}")
         return synapse
@@ -354,20 +542,38 @@ class miner:
         self, synapse: storage.protocol.Challenge
     ) -> storage.protocol.Challenge:
         """
-        Responds to a challenge request by proving possession of the requested data chunk.
-
-        This method fetches and chunks the data requested in the synapse. It computes the commitment to the data chunk
-        based on the provided curve points and returns the chunk along with a merkle proof, root, and commitment
-        as evidence of possession.
+        Handles a data challenge by providing cryptographic proof of data possession. This method retrieves
+        the specified data from storage, calculates its commitment using elliptic curve cryptography, and
+        constructs a Merkle proof. The response includes the requested data chunk, Merkle proof, root, and
+        the commitment, which collectively serve as verifiable evidence of data possession.
 
         Args:
-            synapse (storage.protocol.Challenge): The Challenge synapse containing parameters for the data challenge.
+            synapse (storage.protocol.Challenge): An object representing the challenge request, which includes
+            parameters such as the hash of the data to retrieve, chunk size, challenge index, and elliptic
+            curve parameters for commitment calculation.
 
         Returns:
-            storage.protocol.Challenge: The updated synapse with the response to the data challenge.
+            storage.protocol.Challenge: The synapse object is updated with the response to the challenge,
+            including the encrypted data chunk, commitment point, Merkle proof, and root hash.
+
+        The method performs the following steps:
+        1. Fetches the encrypted data from storage using the hash provided in the challenge.
+        2. Splits the data into chunks based on the specified chunk size.
+        3. Computes a new commitment hash to provide a time-bound proof of possession.
+        4. Generates a Merkle tree from the committed data chunks and extracts a proof for the requested chunk.
+        5. Encodes the requested chunk and Merkle proof in base64 for transmission.
+        6. Updates the challenge synapse with the commitment, data chunk, randomness, and Merkle proof.
+        7. Records the updated commitment hash in storage for future challenges.
+
+        This method ensures data integrity and allows the verification of data possession without disclosing the
+        entire data set. It is designed to fulfill data verification requests in a secure and verifiable manner.
+
+        Example usage:
+            Assuming an initialized 'synapse' object with the challenge parameters:
+            >>> updated_synapse = self.challenge(synapse)
         """
         # Retrieve the data itself from miner storage
-        bt.logging.debug(f"challenge hash: {synapse.challenge_hash}")
+        bt.logging.debug(f"recieved challenge hash: {synapse.challenge_hash}")
         data = self.database.get(synapse.challenge_hash)
         if data is None:
             bt.logging.error(f"No data found for {synapse.challenge_hash}")
@@ -387,16 +593,16 @@ class miner:
         prev_seed = decoded["prev_seed"].encode()
         new_seed = synapse.seed.encode()
         next_commitment, proof = compute_subsequent_commitment(
-            encrypted_data_bytes, prev_seed, new_seed
+            encrypted_data_bytes, prev_seed, new_seed, verbose=self.config.miner.verbose
         )
-        if self.config.verbose:
-            print(
+        if self.config.miner.verbose:
+            bt.logging.debug(
                 f"types: prev_seed {str(type(prev_seed))}, new_seed {str(type(new_seed))}, proof {str(type(proof))}"
             )
-            print(f"prev seed : {prev_seed}")
-            print(f"new seed  : {new_seed}")
-            print(f"proof     : {proof}")
-            print(f"commitment: {next_commitment}\n")
+            bt.logging.debug(f"prev seed : {prev_seed}")
+            bt.logging.debug(f"new seed  : {new_seed}")
+            bt.logging.debug(f"proof     : {proof}")
+            bt.logging.debug(f"commitment: {next_commitment}\n")
         synapse.commitment_hash = next_commitment
         synapse.commitment_proof = proof
 
@@ -405,6 +611,7 @@ class miner:
         self.database.set(synapse.challenge_hash, json.dumps(decoded).encode())
         bt.logging.debug(f"udpated miner storage: {decoded}")
 
+        # Chunk the data according to the provided chunk_size
         data_chunks = chunk_data(encrypted_data_bytes, synapse.chunk_size)
         bt.logging.debug(f"data_chunks: {pformat(data_chunks)}")
 
@@ -424,32 +631,50 @@ class miner:
 
         # Prepare return values to validator
         synapse.commitment = commitments[synapse.challenge_index]
-        bt.logging.debug(f"commitment: {synapse.commitment}")
         synapse.data_chunk = base64.b64encode(chunks[synapse.challenge_index])
-        bt.logging.debug(f"data_chunk: {synapse.data_chunk}")
         synapse.randomness = randomness[synapse.challenge_index]
-        bt.logging.debug(f"randomness: {synapse.randomness}")
         synapse.merkle_proof = b64_encode(
             merkle_tree.get_proof(synapse.challenge_index)
         )
-        bt.logging.debug(f"merkle_proof: {synapse.merkle_proof}")
         synapse.merkle_root = merkle_tree.get_merkle_root()
-        bt.logging.debug(f"merkle_root: {synapse.merkle_root}")
+        if self.config.miner.verbose:
+            bt.logging.debug(f"commitment: {synapse.commitment}")
+            bt.logging.debug(f"data_chunk: {synapse.data_chunk}")
+            bt.logging.debug(f"randomness: {synapse.randomness}")
+            bt.logging.debug(f"merkle_proof: {synapse.merkle_proof}")
+            bt.logging.debug(f"merkle_root: {synapse.merkle_root}")
         return synapse
 
     def retrieve(self, synapse: storage.protocol.Retrieve) -> storage.protocol.Retrieve:
         """
-        Retrieves data based on a given hash from the miner's storage.
-
-        This method looks up the requested data in the Redis database using the provided hash. It then loads
-        the data from the filesystem and includes a final seed challenge to verify continued possession
-        of the data at retrieval time.
+        Retrieves the encrypted data associated with a specific hash from the storage system and
+        validates the miner's continuous possession of the data. The method fetches the data's
+        metadata from a Redis database, loads the encrypted data from the filesystem, and
+        performs a cryptographic challenge-response to ensure the data's integrity and availability.
 
         Args:
-            synapse (storage.protocol.Retrieve): The Retrieve synapse containing the hash of the data to be retrieved.
+            synapse (storage.protocol.Retrieve): A Retrieve synapse object that includes the hash of
+            the data to be retrieved and a seed for the cryptographic challenge.
 
         Returns:
-            storage.protocol.Retrieve: The updated synapse with the retrieved data and additional verification information.
+            storage.protocol.Retrieve: The synapse object is updated with the retrieved encrypted data
+            encoded in base64 and a commitment hash that serves as a proof of retrieval.
+
+        The method executes the following operations:
+        1. Retrieves the metadata associated with the data hash from the Redis database.
+        2. Loads the encrypted data from the filesystem based on the filepath specified in the metadata.
+        3. Computes a new commitment using the previous seed from the metadata and the new seed from
+        the synapse, which serves as a proof for the continuous possession of the data.
+        4. Updates the metadata with the new seed and re-stores it in the database to prepare for future retrievals.
+        5. Encodes the encrypted data in base64 and attaches it to the synapse for return.
+
+        This retrieval process is vital for data validation in decentralized storage systems, as it
+        demonstrates not only possession but also the ability to return the data upon request, which
+        is crucial for maintaining integrity and trust in the system.
+
+        Example usage:
+            Assuming an initialized 'synapse' with a data hash and seed:
+            >>> updated_synapse = self.retrieve(synapse)
         """
         # Fetch the data from the miner database
         data = self.database.get(synapse.data_hash)
@@ -468,6 +693,7 @@ class miner:
             encrypted_data_bytes,
             decoded["prev_seed"].encode(),
             synapse.seed.encode(),
+            verbose=self.config.miner.verbose,
         )
         synapse.commitment_hash = commitment
         synapse.commitment_proof = proof

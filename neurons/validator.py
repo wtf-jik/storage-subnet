@@ -212,6 +212,9 @@ class neuron:
             self.config.neuron.epoch_length = 100
         bt.logging.debug(f"Set epoch_length {self.config.neuron.epoch_length}")
 
+        if self.config.neuron.challenge_sample_size == 0:
+            self.config.neuron.challenge_sample_size = self.metagraph.n
+
         self.prev_step_block = ttl_get_block(self)
         self.step = 0
 
@@ -424,15 +427,18 @@ class neuron:
         # Select subset of miners to query (e.g. redunancy factor of N)
         uids = self.get_random_uids(k=self.config.neuron.store_redundancy)
 
-        updated_axons = []
+        updated_hotkeys = []
+        success_responses = []
+        data_to_broadcast = []
+        broadcast_params = []
         axons = [self.metagraph.axons[uid] for uid in uids]
-        retry_uids = [None]
+        failed_uids = [None]
 
         retries = 0
-        while len(retry_uids) and retries < 3:
-            if retry_uids == [None]:
+        while len(failed_uids) and retries < 3:
+            if failed_uids == [None]:
                 # initial loop
-                retry_uids = []
+                failed_uids = []
 
             # Broadcast the query to selected miners on the network.
             responses = await self.dendrite(
@@ -457,11 +463,10 @@ class neuron:
                         f"Failed to verify store commitment from UID: {uid}"
                     )
                     rewards[idx] = 0.0
-                    retry_uids.append(uid)
+                    failed_uids.append(uid)
                     continue  # Skip trying to store the data
-                else:
-                    rewards[idx] = 1.0
-                    updated_axons.append(self.metagraph.axons[uid])
+
+                rewards[idx] = 1.0
 
                 data_hash = hash_data(encrypted_data)
 
@@ -482,27 +487,27 @@ class neuron:
                 )
 
                 # Broadcast the update to all other validators
-                # TODO: ensure this will not block
-                # TODO: potentially batch update after all miners have responded?
-
-            bt.logging.trace(f"Broadcasting update to all validators")
-            await self.broadcast(response.axon.hotkey, data_hash, response_storage)
+                broadcast_params.append((response.axon.hotkey, response_storage))
 
             if self.config.neuron.verbose:
-                bt.logging.debug(f"responses: {responses}")
+                bt.logging.debug(f"Store responses round {retries}: {responses}")
 
-            bt.logging.trace("Applying store rewards")
+            bt.logging.trace(f"Applying store rewards for retry # {retries}")
             self.apply_reward_scores(uids, responses, rewards)
 
             # Get a new set of UIDs to query for those left behind
-            if retry_uids != []:
-                bt.logging.debug(f"Failed to store on uids: {retry_uids}")
-                uids = self.get_random_uids(k=len(retry_uids))
+            if failed_uids != []:
+                bt.logging.debug(f"Failed to store on uids: {failed_uids}")
+                uids = self.get_random_uids(k=len(failed_uids))
 
                 bt.logging.debug(f"Retrying with new uids: {uids}")
                 axons = [self.metagraph.axons[uid] for uid in uids]
-                retry_uids = []  # reset retry uids
+                failed_uids = []  # reset failed uids for next round
                 retries += 1
+
+        bt.logging.trace(f"Broadcasting update to all validators")
+        for hotkey, data in broadcast_params:
+            await self.broadcast(hotkey, data_hash, data)
 
     async def handle_challenge(
         self, uid: int
@@ -546,28 +551,22 @@ class neuron:
             bt.logging.debug(f"Challenge data: {data}")
 
         try:
-            chunk_size = get_random_chunksize(
-                minsize=self.config.neuron.min_chunk_size,
-                maxsize=max(
-                    self.config.neuron.min_chunk_size,
-                    data["size"] // self.config.neuron.chunk_factor,
-                ),
+            chunk_size = (
+                self.config.neuron.override_chunk_size
+                if self.config.neuron.override_chunk_size > 0
+                else get_random_chunksize(
+                    minsize=self.config.neuron.min_chunk_size,
+                    maxsize=max(
+                        self.config.neuron.min_chunk_size,
+                        data["size"] // self.config.neuron.chunk_factor,
+                    ),
+                )
             )
         except:
             bt.logging.error(
                 f"Failed to get chunk size {self.config.neuron.min_chunk_size} | {self.config.neuron.chunk_factor} | {data['size'] // self.config.neuron.chunk_factor}"
             )
             chunk_size = 0
-
-        if (
-            chunk_size == 0
-            or chunk_size > data["size"]
-            or self.config.neuron.override_chunk_size
-        ):
-            bt.logging.warning(
-                f"Incompatible chunk size {chunk_size}, setting to default {self.config.neuron.override_chunk_size}"
-            )
-            chunk_size = self.config.neuron.override_chunk_size
 
         bt.logging.debug(f"chunk size {chunk_size}")
         num_chunks = data["size"] // chunk_size
@@ -754,7 +753,7 @@ class neuron:
 
     async def forward(self) -> torch.Tensor:
         self.step += 1
-        bt.logging.info(f"forward() {self.step}")
+        bt.logging.info(f"forward step: {self.step}")
 
         try:
             # Store some data
@@ -783,8 +782,6 @@ class neuron:
             except Exception as e:
                 bt.logging.error(f"Failed to retrieve data with exception: {e}")
                 pass
-
-        time.sleep(12)
 
     def run(self):
         bt.logging.info("run()")
@@ -836,9 +833,13 @@ class neuron:
 
                 # Rollover wandb to a new run.
                 if should_reinit_wandb(self):
+                    bt.logging.info(f"Reinitializing wandb")
                     reinit_wandb(self)
 
                 self.prev_step_block = ttl_get_block(self)
+                if self.config.neuron.verbose:
+                    bt.logging.debug(f"block at end of step: {self.prev_step_block}")
+                    bt.logging.debug(f"Step took {time.time() - start_epoch} seconds")
                 self.step += 1
         except Exception as err:
             bt.logging.error("Error in training loop", str(err))

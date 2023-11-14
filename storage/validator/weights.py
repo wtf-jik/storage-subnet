@@ -1,6 +1,6 @@
 # The MIT License (MIT)
 # Copyright © 2023 Yuma Rao
-# Copyright © 2023 Opentensor Foundation
+# Copyright © 2023 philanthrope
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 # documentation files (the “Software”), to deal in the Software without restriction, including without limitation
@@ -78,6 +78,6 @@ def set_weights(self):
         version_key=validator.__spec_version__,
     )
     if result is True:
-        bt.logging.trace("set_weights on chain successfully!")
+        bt.logging.info("set_weights on chain successfully!")
     else:
         bt.logging.error("set_weights failed")
