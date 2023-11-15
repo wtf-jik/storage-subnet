@@ -8,6 +8,40 @@ We consider this system to be an important stepping stone so that bittensor can 
 
 > Note: The storage subnet is in an alpha stage and is subject to rapid development.
 
+# Table of Contents for Subnet 21 Documentation
+
+1. [Overview](#overview)
+2. [What is a Decentralized Storage Network (DSN)?](#what-is-a-decentralized-storage-network-dsn)
+   - [Role of a Miner (Prover)](#role-of-a-miner-prover)
+   - [Role of a Validator (Verifier)](#role-of-a-validator-verifier)
+3. [Main Features of Subnet 21](#main-features-of-subnet-21)
+   - [Zero-Knowledge Proof of Space-Time System](#zero-knowledge-proof-of-space-time-system)
+   - [Chained Proof Challenges](#chained-proof-challenges)
+   - [Data Encryption and Zero-Knowledge Proofs for Privacy Preservation](#data-encryption-and-zero-knowledge-proofs-for-privacy-preservation)
+   - [Scalability and Reliability](#scalability-and-reliability)
+   - [Advanced Cryptographic Techniques](#advanced-cryptographic-techniques)
+   - [User-Centric Approach](#user-centric-approach)
+4. [Zero Knowledge Proof-of-Spacetime](#zero-knowledge-proof-of-spacetime)
+   - [Storage Phase](#storage-phase)
+   - [Challenge Phase](#challenge-phase)
+   - [Retrieval Phase](#retrieval-phase)
+5. [Installation](#installation)
+   - [Running a Miner](#running-a-miner)
+   - [Running a Validator](#running-a-validator)
+6. [Documentation for Storage CLI Interface](#documentation-for-storage-cli-interface)
+   - [Prerequisites](#prerequisites)
+   - [Installation](#installation-1)
+   - [Commands](#commands)
+     - [Store: Storing Data on the Network](#store-storing-data-on-the-network)
+     - [Retrieve: Retrieving Data from the Network](#retrieve-retrieving-data-from-the-network)
+     - [Listing Stored Data](#listing-stored-data)
+   - [Examples](#examples)
+   - [General Options](#general-options)
+   - [Notes](#notes)
+
+
+
+
 ## What is a Decentralized Storage Network (DSN)?
 A DSN is a network architecture where data storage and management are distributed across various locations, controlled by multiple participants rather than a single entity. This approach enhances data security, availability, and resistance to censorship.
 
@@ -163,13 +197,6 @@ The Storage CLI provides a user-friendly command-line interface for storing and 
 
 ## Prerequisites
 Before using the Storage CLI, ensure that Bittensor is installed and your wallet (hotkey and coldkey) is properly configured.
-
-## Installation
-Make sure you have Python 3.6+ and Bittensor installed. You can install Bittensor using pip:
-
-```bash
-pip install bittensor
-```
 
 ## Commands
 
