@@ -182,6 +182,8 @@ class neuron:
                 forward_fn=self.update_index,
             ).attach(
                 forward_fn=self.retrieve_user_data,
+            ).attach(
+                forward_fn=self.store_user_data,
             )
 
             try:
@@ -380,54 +382,34 @@ class neuron:
 
         # TODO: Check the responses to ensure all validaors are updated
 
-    async def store_user_data(self, data: bytes, wallet: bt.wallet):
+    async def store_user_data(self, synapse: protocol.StoreUser) -> protocol.StoreUser:
         """
-        Stores user data using the provided wallet as an encryption key.
+        Stores user encrypted data in the network.
 
         Parameters:
-        - data (bytes): The data to be stored.
-        - wallet (bt.wallet): The wallet to be used for encrypting the data.
+        - synapse (protocol.StoreUser): The synapse object containing the encrypted data.
 
         Returns:
         - The result of the store_data method.
         """
         # Store user data with the user's wallet as encryption key
-        return await self.store_data(data=data, wallet=wallet)
+        success = await self.store_encrypted_data(
+            encrypted_data=synapse.encrypted_data,
+            encryption_payload=synapse.encryption_payload,
+        )
 
-    async def store_validator_data(self, data: bytes = None):
-        """
-        Stores random data using the validator's public key as the encryption key.
+        if success:
+            synapse.data_hash = hash_data(base64.b64decode(synapse.encrypted_data))
+        else:
+            bt.logging.error(f"Failed to store user data")
 
-        Parameters:
-        - data (bytes, optional): The data to be stored. If not provided, random data is generated.
+        return synapse
 
-        Returns:
-        - The result of the store_data method.
-        """
-
-        # Store random data using the validator's pubkey as the encryption key
-        return await self.store_data(data=data, wallet=self.wallet)
-
-    async def store_data(self, data: bytes = None, wallet: bt.wallet = None):
-        """
-        Stores data on the network and ensures it is correctly committed by the miners.
-
-        Parameters:
-        - data (bytes, optional): The data to be stored.
-        - wallet (bt.wallet, optional): The wallet to be used for encrypting the data.
-
-        Returns:
-        - The status of the data storage operation.
-        """
-
+    async def store_encrypted_data(
+        self, encrytped_data: bytes, encryption_payload: dict
+    ) -> bool:
         # Setup CRS for this round of validation
         g, h = setup_CRS(curve=self.config.neuron.curve)
-
-        # Make a random bytes file to test the miner if none provided
-        data = data or make_random_file(maxsize=self.config.neuron.maxsize)
-
-        # Encrypt the data
-        encrypted_data, encryption_payload = encrypt_data(data, wallet)
 
         # Hash the data
         data_hash = hash_data(encrypted_data)
@@ -528,6 +510,29 @@ class neuron:
         bt.logging.trace(f"Broadcasting update to all validators")
         for hotkey, data in broadcast_params:
             await self.broadcast(hotkey, data_hash, data)
+
+    async def store_random_data(self):
+        """
+        Stores data on the network and ensures it is correctly committed by the miners.
+
+        Parameters:
+        - data (bytes, optional): The data to be stored.
+        - wallet (bt.wallet, optional): The wallet to be used for encrypting the data.
+
+        Returns:
+        - The status of the data storage operation.
+        """
+
+        # Setup CRS for this round of validation
+        g, h = setup_CRS(curve=self.config.neuron.curve)
+
+        # Make a random bytes file to test the miner if none provided
+        data = make_random_file(maxsize=self.config.neuron.maxsize)
+
+        # Encrypt the data
+        encrypted_data, encryption_payload = encrypt_data(data, self.wallet)
+
+        self.store_encrypted_data(encrypted_data, encryption_payload)
 
     async def handle_challenge(
         self, uid: int
@@ -663,14 +668,12 @@ class neuron:
         bt.logging.debug(f"inside retrieve_user_data")
 
         # Return the data to the client so that they can decrypt with their bittensor wallet
-        async for encrypted_data, encryption_payload in self.retrieve(
-            synapse.data_hash
-        ):
-            bt.logging.debug(f"recieved encrypted_Data {encrypted_data}")
-            # Return the first element, whoever is fastest wins
-            synapse.encrypted_data = encrypted_data
-            synapse.encryption_payload = encryption_payload
-            return synapse
+        encrypted_data, encryption_payload = self.retrieve(synapse.data_hash)
+        bt.logging.debug(f"recieved encrypted_Data {encrypted_data}")
+        # Return the first element, whoever is fastest wins
+        synapse.encrypted_data = encrypted_data
+        synapse.encryption_payload = encryption_payload
+        return synapse
 
     async def retrieve(
         self, data_hash: str = None
@@ -765,11 +768,11 @@ class neuron:
                 update_metadata_for_data_hash(hotkey, data_hash, data, self.database)
 
                 # TODO: get a temp link from the server to send back to the client instead
-                yield response.data, data["encryption_payload"]
+                return response.data, data["encryption_payload"]
 
             except Exception as e:
                 bt.logging.error(
-                    f"Failed to yield data from UID: {uids[idx]} with error: {e}"
+                    f"Failed to return data from UID: {uids[idx]} with error: {e}"
                 )
 
         bt.logging.trace("Applying retrieve rewards")
@@ -782,13 +785,9 @@ class neuron:
         try:
             # Store some data
             bt.logging.info("initiating store data")
-            await self.store_validator_data()
+            await self.store_random_data()
         except Exception as e:
-            import pdb
-
-            pdb.set_trace()
             bt.logging.error(f"Failed to store data with exception: {e}")
-            pass
 
         try:
             # Challenge some data
@@ -796,16 +795,14 @@ class neuron:
             await self.challenge()
         except Exception as e:
             bt.logging.error(f"Failed to challenge data with exception: {e}")
-            pass
 
-        if self.step % 3 == 0:
+        if self.step % self.config.neuron.retrieve_epoch_steps == 0:
             try:
                 # Retrieve some data
                 bt.logging.info("initiating retrieve")
                 await self.retrieve()
             except Exception as e:
                 bt.logging.error(f"Failed to retrieve data with exception: {e}")
-                pass
 
     def run(self):
         bt.logging.info("run()")
