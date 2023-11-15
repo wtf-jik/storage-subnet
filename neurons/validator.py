@@ -406,8 +406,15 @@ class neuron:
         return synapse
 
     async def store_encrypted_data(
-        self, encrytped_data: bytes, encryption_payload: dict
+        self, encrypted_data: typing.Union[bytes, str], encryption_payload: dict
     ) -> bool:
+        encrypted_data = (
+            encrypted_data.encode("utf-8")
+            if isinstance(encrypted_data, str)
+            else encrypted_data
+        )
+        bt.logging.debug(f"Storing encrypted user data {encrypted_data}")
+
         # Setup CRS for this round of validation
         g, h = setup_CRS(curve=self.config.neuron.curve)
 
@@ -416,6 +423,7 @@ class neuron:
 
         # Convert to base64 for compactness
         b64_encrypted_data = base64.b64encode(encrypted_data).decode("utf-8")
+        bt.logging.debug(f"b64 encrypted user data {b64_encrypted_data}")
 
         synapse = protocol.Store(
             encrypted_data=b64_encrypted_data,
@@ -510,6 +518,11 @@ class neuron:
         bt.logging.trace(f"Broadcasting update to all validators")
         for hotkey, data in broadcast_params:
             await self.broadcast(hotkey, data_hash, data)
+
+        if len(all_success_uids):
+            return True
+
+        return False
 
     async def store_random_data(self):
         """
@@ -668,7 +681,7 @@ class neuron:
         bt.logging.debug(f"inside retrieve_user_data")
 
         # Return the data to the client so that they can decrypt with their bittensor wallet
-        encrypted_data, encryption_payload = self.retrieve(synapse.data_hash)
+        encrypted_data, encryption_payload = await self.retrieve(synapse.data_hash)
         bt.logging.debug(f"recieved encrypted_Data {encrypted_data}")
         # Return the first element, whoever is fastest wins
         synapse.encrypted_data = encrypted_data
