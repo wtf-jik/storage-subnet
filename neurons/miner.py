@@ -35,8 +35,6 @@ from Crypto.Random import get_random_bytes
 
 from pprint import pprint, pformat
 
-from test_miner import test
-
 # import this repo
 import storage
 from storage.shared.ecc import (
@@ -218,10 +216,6 @@ class miner:
         self.request_timestamps: Dict = {}
 
         self.step = 0
-
-        if self.config.test:  # (debugging)
-            test(self)
-            exit(0)
 
     @property
     def total_storage(self):
