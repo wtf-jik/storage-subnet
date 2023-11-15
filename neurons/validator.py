@@ -169,12 +169,19 @@ class neuron:
         self.moving_averaged_scores = torch.zeros((self.metagraph.n)).to(self.device)
         bt.logging.debug(str(self.moving_averaged_scores))
 
+        self.my_subnet_uid = self.metagraph.hotkeys.index(
+            self.wallet.hotkey.ss58_address
+        )
+        bt.logging.info(f"Running validator on uid: {self.my_subnet_uid}")
+
         bt.logging.debug("serving ip to chain...")
         try:
             self.axon = bt.axon(wallet=self.wallet, config=self.config)
 
             self.axon.attach(
                 forward_fn=self.update_index,
+            ).attach(
+                forward_fn=self.retrieve_user_data,
             )
 
             try:
@@ -189,6 +196,14 @@ class neuron:
         except Exception as e:
             bt.logging.error(f"Failed to create Axon initialize with exception: {e}")
             pass
+
+        # Start  starts the validator's axon, making it active on the network.
+        bt.logging.info(f"Starting axon server on port: {self.config.axon.port}")
+        self.axon.start()
+
+        bt.logging.info(
+            f"Served axon {self.axon} on network: {self.subtensor.chain_endpoint} with netuid: {self.config.netuid}"
+        )
 
         # Dendrite pool for querying the network.
         bt.logging.debug("loading", "dendrite_pool")
@@ -404,6 +419,7 @@ class neuron:
         Returns:
         - The status of the data storage operation.
         """
+
         # Setup CRS for this round of validation
         g, h = setup_CRS(curve=self.config.neuron.curve)
 
@@ -412,6 +428,9 @@ class neuron:
 
         # Encrypt the data
         encrypted_data, encryption_payload = encrypt_data(data, wallet)
+
+        # Hash the data
+        data_hash = hash_data(encrypted_data)
 
         # Convert to base64 for compactness
         b64_encrypted_data = base64.b64encode(encrypted_data).decode("utf-8")
@@ -427,12 +446,11 @@ class neuron:
         # Select subset of miners to query (e.g. redunancy factor of N)
         uids = self.get_random_uids(k=self.config.neuron.store_redundancy)
 
-        updated_hotkeys = []
-        success_responses = []
-        data_to_broadcast = []
         broadcast_params = []
         axons = [self.metagraph.axons[uid] for uid in uids]
         failed_uids = [None]
+        all_failed_uids = []
+        all_success_uids = []
 
         retries = 0
         while len(failed_uids) and retries < 3:
@@ -467,9 +485,9 @@ class neuron:
                     continue  # Skip trying to store the data
 
                 rewards[idx] = 1.0
+                all_success_uids.append(uid)
 
-                data_hash = hash_data(encrypted_data)
-
+                # Prepare storage for the data for particular miner
                 response_storage = {
                     "prev_seed": synapse.seed,
                     "size": sys.getsizeof(encrypted_data),
@@ -486,7 +504,7 @@ class neuron:
                     f"Stored data in database with key: {response.axon.hotkey} | {data_hash}"
                 )
 
-                # Broadcast the update to all other validators
+                # Collect broadcast params to send the update to all other validators
                 broadcast_params.append((response.axon.hotkey, response_storage))
 
             if self.config.neuron.verbose:
@@ -497,6 +515,8 @@ class neuron:
 
             # Get a new set of UIDs to query for those left behind
             if failed_uids != []:
+                all_failed_uids += failed_uids  # record these for the event
+
                 bt.logging.debug(f"Failed to store on uids: {failed_uids}")
                 uids = self.get_random_uids(k=len(failed_uids))
 
@@ -637,7 +657,24 @@ class neuron:
         bt.logging.trace("Applying challenge rewards")
         self.apply_reward_scores(uids, responses, rewards)
 
-    async def retrieve(self, data_hash=None):
+    async def retrieve_user_data(
+        self, synapse: protocol.RetrieveUser
+    ) -> protocol.RetrieveUser:
+        bt.logging.debug(f"inside retrieve_user_data")
+
+        # Return the data to the client so that they can decrypt with their bittensor wallet
+        async for encrypted_data, encryption_payload in self.retrieve(
+            synapse.data_hash
+        ):
+            bt.logging.debug(f"recieved encrypted_Data {encrypted_data}")
+            # Return the first element, whoever is fastest wins
+            synapse.encrypted_data = encrypted_data
+            synapse.encryption_payload = encryption_payload
+            return synapse
+
+    async def retrieve(
+        self, data_hash: str = None
+    ) -> typing.Tuple[bytes, typing.Callable]:
         """
         Retrieves and verifies data from the network, ensuring integrity and correctness of the data associated with the given hash.
 
@@ -704,7 +741,7 @@ class neuron:
 
             if str(hash_data(decoded_data)) != data_hash:
                 bt.logging.error(
-                    f"Hash of received data does not match expected hash! {str(hash_data(decoded_data))} != {data_hash}"
+                    f"Hash of recieved data does not match expected hash! {str(hash_data(decoded_data))} != {data_hash}"
                 )
                 rewards[idx] = -1.0
                 continue
@@ -717,7 +754,7 @@ class neuron:
                 rewards[idx] = 1.0
 
             try:
-                bt.logging.trace(f"Decrypting from UID: {uids[idx]}")
+                bt.logging.trace(f"Fetching AES payload from UID: {uids[idx]}")
 
                 # Load the data for this miner from validator storage
                 data = get_metadata_from_hash(hotkey, data_hash, self.database)
@@ -727,29 +764,16 @@ class neuron:
                 data["counter"] += 1
                 update_metadata_for_data_hash(hotkey, data_hash, data, self.database)
 
-                # TODO: Add this decryption on the miner side provided the user logs in
-                # with their wallet! This way miners can send back a landing/login link
                 # TODO: get a temp link from the server to send back to the client instead
+                yield response.data, data["encryption_payload"]
 
-                # Encapsulate this function with args so only need to pass the wallet
-                # The partial func decrypts the data using the validator stored encryption keys
-                decrypt_user_data = partial(
-                    decrypt_data,
-                    encrypted_data=decoded_data,
-                    encryption_payload=data["encryption_payload"],
-                )
-                # Pass the user back the encrypted_data along with a function to decrypt it
-                # given their wallet which was used to encrypt in the first place
-                datas.append((decoded_data, decrypt_user_data))
             except Exception as e:
                 bt.logging.error(
-                    f"Failed to decrypt data from UID: {uids[idx]} with error: {e}"
+                    f"Failed to yield data from UID: {uids[idx]} with error: {e}"
                 )
 
         bt.logging.trace("Applying retrieve rewards")
         self.apply_reward_scores(uids, responses, rewards)
-
-        return datas
 
     async def forward(self) -> torch.Tensor:
         self.step += 1
