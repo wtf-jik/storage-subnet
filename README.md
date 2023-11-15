@@ -156,3 +156,96 @@ python neurons/miner.py --wallet.name <NAME> --wallet.hotkey <HOTKEY>
 python neurons/validator.py --wallet.name <NAME> --wallet.hotkey <HOTKEY>
 ```
 
+# Documentation for Storage CLI Interface
+
+## Overview
+The Storage CLI provides a user-friendly command-line interface for storing and retrieving data on the Bittensor network. It simplifies the process of data encryption, storage, and retrieval, ensuring security and ease of use. This tool is ideal for users who need to manage data securely on a decentralized network.
+
+## Prerequisites
+Before using the Storage CLI, ensure that Bittensor is installed and your wallet (hotkey and coldkey) is properly configured.
+
+## Installation
+Make sure you have Python 3.6+ and Bittensor installed. You can install Bittensor using pip:
+
+```bash
+pip install bittensor
+```
+
+## Commands
+
+### 1. Store: Storing Data on the Network
+This command encrypts and stores data on the Bittensor network.
+
+#### Subcommands
+- `put`: Encrypt and store data.
+
+#### Usage
+```bash
+stcli store put --filepath <path-to-data> [options]
+```
+
+#### Options
+- `--filepath <path-to-data>`: Path to the data file to be stored.
+- `--hash_basepath <path>`: (Optional) Path to store the data hashes.
+- `--stake_limit <float>`: (Optional) Stake limit to filter validator axons.
+- `--wallet.name <name>`: (Optional) Wallet coldkey name.
+- `--wallet.hotkey <name>`: (Optional) Hotkey name.
+
+### 2. Retrieve: Retrieving Data from the Network
+This command retrieves previously stored data from the Bittensor network.
+
+#### Subcommands
+- `list`: Lists all data associated with a specific coldkey.
+- `get`: Retrieve and decrypt data.
+
+#### Usage
+```bash
+stcli retrieve get --data_hash <hash> [options]
+```
+
+#### Options
+- `--data_hash <hash>`: Hash of the data to retrieve.
+- `--hash_basepath <path>`: (Optional) Path where data hashes are stored.
+- `--stake_limit <float>`: (Optional) Stake limit for validator axons.
+- `--storage_basepath <path>`: (Optional) Path to store retrieved data.
+- `--wallet.name <name>`: (Optional) Wallet coldkey name.
+- `--wallet.hotkey <name>`: (Optional) Hotkey name.
+
+### Listing Stored Data
+Lists all data hashes stored on the network associated with the specified coldkey.
+
+#### Usage
+```bash
+stcli retrieve list [options]
+```
+
+#### Options
+- `--hash_basepath <path>`: (Optional) Path where data hashes are stored.
+- `--wallet.name <name>`: (Optional) Wallet coldkey name.
+
+## Examples
+
+### Storing Data
+```bash
+stcli store put --filepath ./example.txt --wallet.name mywallet --wallet.hotkey myhotkey
+```
+
+### Retrieving Data
+```bash
+stcli retrieve get --data_hash 123456789 --storage_basepath ./retrieved --wallet.name mywallet --wallet.hotkey myhotkey
+```
+
+### Listing Data
+```bash
+stcli retrieve list --wallet.name mywallet
+```
+
+## General Options
+- `--help`: Displays help information about CLI commands and options.
+
+## Notes
+- Ensure your wallet is configured and accessible.
+- File paths should be absolute or relative to your current directory.
+- Data hashes are unique identifiers for your stored data on the Bittensor network.
+
+For detailed instructions and more information, visit the [Bittensor Documentation](https://bittensor.com/docs).
