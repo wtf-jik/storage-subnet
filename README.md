@@ -180,6 +180,47 @@ cd storage-subnet
 python -m pip install -e .
 ```
 
+### Install Redis
+Install Redis on your host system.
+
+Linux [instructions](https://redis.io/docs/install/install-redis/install-redis-on-linux/)
+
+```bash
+sudo apt install lsb-release curl gpg
+
+curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
+
+echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
+
+sudo apt-get update
+sudo apt-get install redis
+```
+
+Ensure the local Redis server is started.
+
+```bash
+sudo systemctl status redis-server.service
+```
+
+You should see output like:
+```
+● redis-server.service - Advanced key-value store
+     Loaded: loaded (/lib/systemd/system/redis-server.service; disabled; vendor preset: enabled)
+     Active: active (running) since Thu 2023-11-16 22:35:42 EST; 3min 25s ago
+       Docs: http://redis.io/documentation,
+             man:redis-server(1)
+   Main PID: 31881 (redis-server)
+     Status: "Ready to accept connections"
+      Tasks: 5 (limit: 38370)
+     Memory: 2.9M
+        CPU: 387ms
+     CGroup: /system.slice/redis-server.service
+             └─31881 "/usr/bin/redis-server 127.0.0.1:6379" "" "" "" "" "" "" ""
+
+Nov 16 22:35:42 user systemd[1]: Starting Advanced key-value store...
+Nov 16 22:35:42 user systemd[1]: Started Advanced key-value store.
+```
+
 ### Running a miner
 ```bash
 python neurons/miner.py --wallet.name <NAME> --wallet.hotkey <HOTKEY>
