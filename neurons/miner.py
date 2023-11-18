@@ -491,12 +491,13 @@ class miner:
             hex_to_ecc_point(synapse.g, synapse.curve),
             hex_to_ecc_point(synapse.h, synapse.curve),
         )
-        bt.logging.debug(f"committer: {committer}")
-        bt.logging.debug(f"encrypted_byte_data: {encrypted_byte_data}")
         c, m_val, r = committer.commit(encrypted_byte_data + str(synapse.seed).encode())
-        bt.logging.debug(f"c: {c}")
-        bt.logging.debug(f"m_val: {m_val}")
-        bt.logging.debug(f"r: {r}")
+        if self.config.miner.verbose:
+            bt.logging.debug(f"committer: {committer}")
+            bt.logging.debug(f"encrypted_byte_data: {encrypted_byte_data}")
+            bt.logging.debug(f"c: {c}")
+            bt.logging.debug(f"m_val: {m_val}")
+            bt.logging.debug(f"r: {r}")
 
         # Store the data with the hash as the key in the filesystem
         data_hash = hash_data(encrypted_byte_data)
@@ -529,7 +530,8 @@ class miner:
         synapse.commitment_hash = str(m_val)
         bt.logging.trace(f"initial commitment_hash: {synapse.commitment_hash}")
 
-        bt.logging.debug(f"returning synapse: {synapse}")
+        if self.config.miner.verbose:
+            bt.logging.debug(f"returning synapse: {synapse}")
         return synapse
 
     def challenge(
@@ -602,7 +604,7 @@ class miner:
         # update the commitment seed challenge hash in storage
         decoded["prev_seed"] = new_seed.decode("utf-8")
         self.database.set(synapse.challenge_hash, json.dumps(decoded).encode())
-        bt.logging.debug(f"udpated miner storage: {decoded}")
+        bt.logging.debug(f"udpated miner storage: {pformat(decoded)}")
 
         # Chunk the data according to the provided chunk_size
         data_chunks = chunk_data(encrypted_data_bytes, synapse.chunk_size)
@@ -694,7 +696,7 @@ class miner:
         # store new seed
         decoded["prev_seed"] = synapse.seed
         self.database.set(synapse.data_hash, json.dumps(decoded).encode())
-        bt.logging.debug(f"udpated retrieve miner storage: {decoded}")
+        bt.logging.debug(f"udpated retrieve miner storage: {pformat(decoded)}")
 
         # Return base64 data
         synapse.data = base64.b64encode(encrypted_data_bytes)

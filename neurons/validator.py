@@ -74,6 +74,7 @@ from storage.validator.state import (
     save_state,
     init_wandb,
     ttl_get_block,
+    log_event,
 )
 
 from storage.validator.weights import (
@@ -330,7 +331,7 @@ class neuron:
                 "encryption_payload",
             ]
         }
-        bt.logging.debug(f"entry: {entry}")
+        bt.logging.debug(f"entry: {pformat(entry)}")
 
         # Update the index with the new data
         # with self.db_semaphore:
@@ -380,9 +381,10 @@ class neuron:
             vpermit_uids
             != self.metagraph.hotkeys.index(self.wallet.hotkey.ss58_address)
         ]
-        query_uids = torch.where(
+        query_idxs = torch.where(
             self.metagraph.S[vpermit_uids] > self.config.neuron.broadcast_stake_limit
         )[0]
+        query_uids = vpermit_uids[query_idxs]
         axons = [self.metagraph.axons[uid] for uid in query_uids]
 
         if self.config.neuron.verbose:
@@ -398,7 +400,7 @@ class neuron:
             counter=data["counter"],
             encryption_payload=data["encryption_payload"],
         )
-        bt.logging.debug(f"Update synapse sending: {synapse}")
+        bt.logging.debug(f"Update synapse sending: {pformat(synapse)}")
 
         # Send synapse to all validator axons
         responses = await self.dendrite(
@@ -422,12 +424,12 @@ class neuron:
         - The result of the store_data method.
         """
         # Store user data with the user's wallet as encryption key
-        success = await self.store_encrypted_data(
+        event = await self.store_encrypted_data(
             encrypted_data=synapse.encrypted_data,
             encryption_payload=synapse.encryption_payload,
         )
 
-        if success:
+        if any(event.successful):
             synapse.data_hash = hash_data(base64.b64decode(synapse.encrypted_data))
         else:
             bt.logging.error(f"Failed to store user data")
@@ -583,22 +585,11 @@ class neuron:
         # Update event log with moving averaged scores
         event.moving_averaged_scores = self.moving_averaged_scores.tolist()
 
-        # Log event
-        bt.logging.debug("event:", str(event))
-        if not self.config.neuron.dont_save_events:
-            # import pdb; pdb.set_trace()
-            logger.log("EVENTS", "events", **event.__dict__)
-
-        # Log the event to wandb
-        if not self.config.wandb.off:
-            wandb_event = EventSchema.from_dict(event)
-            self.wandb.log(asdict(wandb_event))
-
         bt.logging.trace(f"Broadcasting update to all validators")
         for hotkey, data in broadcast_params:
             await self.broadcast(hotkey, data_hash, data)
 
-        return any(event.successful)
+        return event
 
     async def store_random_data(self):
         """
@@ -636,7 +627,8 @@ class neuron:
         - Tuple[bool, protocol.Challenge]: A tuple containing the verification result and the challenge.
         """
         hotkey = self.metagraph.hotkeys[uid]
-        bt.logging.debug(f"Handling challenge from hotkey: {hotkey}")
+        if self.config.neuron.verbose:
+            bt.logging.debug(f"Handling challenge from hotkey: {hotkey}")
 
         keys = self.database.hkeys(hotkey)
         if keys == []:
@@ -711,6 +703,7 @@ class neuron:
             data["counter"] += 1
             update_metadata_for_data_hash(hotkey, data_hash, data, self.database)
 
+        # Record the time taken for the challenge
         return verified, response
 
     async def challenge(self):
@@ -719,6 +712,22 @@ class neuron:
 
         Asynchronously challenge and see who returns the data fastest (passes verification), and rank them highest
         """
+
+        event = EventSchema(
+            task_name="Challenge",
+            successful=[],
+            completion_times=[],
+            task_status_messages=[],
+            task_status_codes=[],
+            block=self.subtensor.get_current_block(),
+            uids=[],
+            step_length=0.0,
+            best_uid=-1,
+            best_hotkey="",
+            rewards=[],
+        )
+
+        start_time = time.time()
         tasks = []
         uids = self.get_random_uids(
             k=min(self.metagraph.n, self.config.neuron.challenge_sample_size)
@@ -727,7 +736,6 @@ class neuron:
             tasks.append(asyncio.create_task(self.handle_challenge(uid)))
 
         responses = await asyncio.gather(*tasks)
-
         if self.config.neuron.verbose:
             bt.logging.debug(f"Challenge repsonses: {responses}")
 
@@ -736,20 +744,37 @@ class neuron:
             len(responses), dtype=torch.float32
         ).to(self.device)
 
-        # TODO: check and see if we have a dummy synapse (e.g. no data found, shouldn't penalize)
         for idx, (uid, (verified, response)) in enumerate(zip(uids, responses)):
             if self.config.neuron.verbose:
                 bt.logging.debug(
                     f"Challenge idx {idx} uid {uid} verified {verified} response {response}"
                 )
-            if verified:
-                rewards[idx] = 1.0
-            else:
-                rewards[idx] = 0.0
+
+            # Apply reward for this challenge
+            rewards[idx] = 1.0 if verified else 0.0
+
+            # Log the event data for this specific challenge
+            event.uids.append(uid)
+            event.successful.append(verified)
+            event.completion_times.append(response[0].dendrite.process_time)
+            event.task_status_messages.append(response[0].dendrite.status_message)
+            event.task_status_codes.append(response[0].dendrite.status_code)
+            event.rewards.append(1.0 if verified else 0.0)
+
+        # Calculate the total step length for all challenges
+        event.step_length = time.time() - start_time
 
         responses = [response[0] for (verified, response) in responses]
         bt.logging.trace("Applying challenge rewards")
         self.apply_reward_scores(uids, responses, rewards)
+
+        # Determine the best UID based on rewards
+        if event.rewards:
+            best_index = max(range(len(event.rewards)), key=event.rewards.__getitem__)
+            event.best_uid = event.uids[best_index]
+            event.best_hotkey = self.metagraph.hotkeys[event.best_uid]
+
+        return event
 
     async def retrieve_user_data(
         self, synapse: protocol.RetrieveUser
@@ -787,6 +812,24 @@ class neuron:
 
         bt.logging.debug(f"Retrieving data with hash: {data_hash}")
 
+        # Initialize event schema
+        event = EventSchema(
+            task_name="Retrieve",
+            successful=[],
+            completion_times=[],
+            task_status_messages=[],
+            task_status_codes=[],
+            block=self.subtensor.get_current_block(),
+            uids=[],
+            step_length=0.0,
+            best_uid=-1,
+            best_hotkey="",
+            rewards=[],
+            set_weights=[],
+        )
+
+        start_time = time.time()
+
         # Make sure we have the most up-to-date hotkey info
         self.metagraph.sync(lite=True)
 
@@ -820,8 +863,10 @@ class neuron:
         ).to(self.device)
 
         datas = []
-        for idx, response in enumerate(responses):
-            bt.logging.debug(f"response: {response}")
+        for idx, (uid, response) in enumerate(zip(uids, responses)):
+            if self.config.neuron.verbose:
+                bt.logging.debug(f"response: {response}")
+
             try:
                 decoded_data = base64.b64decode(response.data)
             except Exception as e:
@@ -838,12 +883,20 @@ class neuron:
                 rewards[idx] = -1.0
                 continue
 
-            if not verify_retrieve_with_seed(response):
+            if not success:
                 bt.logging.error(f"data verification failed! {response}")
                 rewards[idx] = -1.0  # Losing use data is unacceptable, harsh punishment
                 continue  # skip trying to decode the data
             else:
                 rewards[idx] = 1.0
+
+            success = verify_retrieve_with_seed(response)
+            event.uids.append(uid)
+            event.successful.append(success)
+            event.completion_times.append(time.time() - start_time)
+            event.task_status_messages.append(response.dendrite.status_message)
+            event.task_status_codes.append(response.dendrite.status_code)
+            event.rewards.append(rewards[idx].item())
 
             try:
                 bt.logging.trace(f"Fetching AES payload from UID: {uids[idx]}")
@@ -871,27 +924,39 @@ class neuron:
         self.step += 1
         bt.logging.info(f"forward step: {self.step}")
 
-        # try:
-        # Store some data
-        bt.logging.info("initiating store data")
-        await self.store_random_data()
-        # except Exception as e:
-        #     bt.logging.error(f"Failed to store data with exception: {e}")
+        try:
+            # Store some data
+            bt.logging.info("initiating store data")
+            event = await self.store_random_data()
 
-        # try:
-        #     # Challenge some data
-        #     bt.logging.info("initiating challenge")
-        #     await self.challenge()
-        # except Exception as e:
-        #     bt.logging.error(f"Failed to challenge data with exception: {e}")
+            # Log event
+            log_event(self, event)
 
-        # if self.step % self.config.neuron.retrieve_epoch_steps == 0:
-        #     try:
-        #         # Retrieve some data
-        #         bt.logging.info("initiating retrieve")
-        #         await self.retrieve()
-        #     except Exception as e:
-        #         bt.logging.error(f"Failed to retrieve data with exception: {e}")
+        except Exception as e:
+            bt.logging.error(f"Failed to store data with exception: {e}")
+
+        try:
+            # Challenge some data
+            bt.logging.info("initiating challenge")
+            event = await self.challenge()
+
+            # Log event
+            log_event(self, event)
+
+        except Exception as e:
+            bt.logging.error(f"Failed to challenge data with exception: {e}")
+
+        if self.step % self.config.neuron.retrieve_epoch_steps == 0:
+            try:
+                # Retrieve some data
+                bt.logging.info("initiating retrieve")
+                event = await self.retrieve()
+
+                # Log event
+                log_event(self, event)
+
+            except Exception as e:
+                bt.logging.error(f"Failed to retrieve data with exception: {e}")
 
     def run(self):
         bt.logging.info("run()")
