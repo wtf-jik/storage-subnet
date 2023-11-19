@@ -107,7 +107,7 @@ def add_args(cls, parser):
         help="Number of miners to store each piece of data on.",
     )
     parser.add_argument(
-        "--neuron.retrieve_epoch_steps",
+        "--neuron.retrieve_epoch_length",
         type=int,
         default=2,
         help="Number of steps to take before retrieving data.",
@@ -152,19 +152,19 @@ def add_args(cls, parser):
         "--neuron.store_timeout",
         type=float,
         help="Retreive data query timeout.",
-        default=20,
+        default=10,
     )
     parser.add_argument(
         "--neuron.challenge_timeout",
         type=float,
         help="Retreive data query timeout.",
-        default=20,
+        default=10,
     )
     parser.add_argument(
         "--neuron.retrieve_timeout",
         type=float,
         help="Retreive data query timeout.",
-        default=50,
+        default=10,
     )
     parser.add_argument(
         "--neuron.epoch_length_override",
@@ -176,7 +176,13 @@ def add_args(cls, parser):
         "--neuron.checkpoint_block_length",
         type=int,
         help="Blocks before a checkpoint is saved.",
-        default=100,
+        default=50,
+    )
+    parser.add_argument(
+        "--neuron.compute_tiers_epoch_length",
+        type=int,
+        help="Epoch length for computing tiers.",
+        default=200,
     )
     parser.add_argument(
         "--neuron.blocks_per_step",
