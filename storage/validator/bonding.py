@@ -24,9 +24,9 @@ GOLD_TIER_REWARD_FACTOR = 0.888  # Get 88.8% of rewards
 SILVER_TIER_REWARD_FACTOR = 0.555  # Get 55.5% of rewards
 BRONZE_TIER_REWARD_FACTOR = 0.222  # Get 22.2% of rewards
 
-DIAMOND_TIER_TOTAL_SUCCESSES = 10**9  # 1 billion
-GOLD_TIER_TOTAL_SUCCESSES = 10**7  # 10 million
-SILVER_TIER_TOTAL_SUCCESSES = 10**5  # 100,000 million
+DIAMOND_TIER_TOTAL_SUCCESSES = 10**7  # 10 million
+GOLD_TIER_TOTAL_SUCCESSES = 10**6  # 1 million
+SILVER_TIER_TOTAL_SUCCESSES = 10**5  # 100,000
 
 
 def miner_is_registered(ss58_address, database):
@@ -77,7 +77,7 @@ def update_statistics(ss58_address, success, task_type, database):
         database.hincrby(stats_key, "challenge_attempts", 1)
         if success:
             database.hincrby(stats_key, "challenge_successes", 1)
-    elif task_type == "retrieval":
+    elif task_type == "retrieve":
         database.hincrby(stats_key, "retrieval_attempts", 1)
         if success:
             database.hincrby(stats_key, "retrieval_successes", 1)

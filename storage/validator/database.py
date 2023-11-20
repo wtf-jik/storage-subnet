@@ -21,7 +21,7 @@ import asyncio
 import bittensor as bt
 
 
-# Functioßn to add metadata to a hash in Redis
+# Function to add metadata to a hash in Redis
 def add_metadata_to_hotkey(ss58_address, data_hash, metadata, database):
     """
     Associates a data hash and its metadata with a hotkey in Redis.
@@ -36,9 +36,7 @@ def add_metadata_to_hotkey(ss58_address, data_hash, metadata, database):
     metadata_json = json.dumps(metadata)
     # Use HSET to associate the data hash with the hotkey
     database.hset(ss58_address, data_hash, metadata_json)
-    bt.logging.debug(
-        f"Associated data hash {data_hash} and metadata with hotkey {ss58_address}."
-    )
+    bt.logging.trace(f"Associated data hash {data_hash} with hotkey {ss58_address}.")
 
 
 def get_all_data_for_hotkey(ss58_address, database, return_hashes=False):
@@ -161,7 +159,7 @@ def get_all_hotkeys_for_data_hash(data_hash, database):
     return hotkeys
 
 
-def calculate_total_hotkey_storage(database, hotkey):
+def calculate_total_hotkey_storage(hotkey, database):
     """
     Calculates the total storage used by a hotkey in the database.
 
@@ -180,6 +178,33 @@ def calculate_total_hotkey_storage(database, hotkey):
             # Add the size of the data to the total storage
             total_storage += metadata["size"]
     return total_storage
+
+
+def hotkey_at_capacity(hotkey, database):
+    """
+    Checks if the hotkey is at capacity.
+
+    Parameters:
+        database (redis.Redis): The Redis client instance.
+        hotkey (str): The key representing the hotkey.
+
+    Returns:
+        True if the hotkey is at capacity, False otherwise.
+    """
+    # Get the total storage used by the hotkey
+    total_storage = calculate_total_hotkey_storage(hotkey, database)
+    # Check if the hotkey is at capacity
+    byte_limit = database.hget(f"stats:{hotkey}", "storage_limit")
+    try:
+        limit = int(byte_limit)
+    except Exception as e:
+        bt.logging.error(f"Could not parse storage limit for {hotkey} | {e}.")
+        return False
+    if total_storage >= limit:
+        bt.logging.debug(f"Hotkey {hotkey} is at max capacity {limit // 10**9} GB.")
+        return True
+    else:
+        return False
 
 
 def calculate_total_network_storage(database):
