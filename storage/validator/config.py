@@ -84,7 +84,7 @@ def add_args(cls, parser):
     )
     parser.add_argument(
         "--neuron.maxsize",
-        default=None,  # Use lognormal random gaussian if None (2**16, # 64KB)
+        default=2**16,  # Use lognormal random gaussian if None (2**16, # 64KB)
         type=int,
         help="Maximum size of random data to store.",
     )
@@ -105,6 +105,12 @@ def add_args(cls, parser):
         type=int,
         default=3,
         help="Number of miners to store each piece of data on.",
+    )
+    parser.add_argument(
+        "--neuron.store_epoch_length",
+        type=int,
+        default=3,
+        help="Number of steps to take before storing data.",
     )
     parser.add_argument(
         "--neuron.retrieve_epoch_length",

@@ -258,10 +258,9 @@ class neuron:
         Parameters:
         - synapse (protocol.Update): The synapse object containing the update information.
         """
-        data = get_metadata_from_hash(synapse.data_hash, synapse.hotkey, self.database)
         entry = {
             k: v
-            for k, v in synapse.dict()
+            for k, v in synapse.dict().items()
             if k
             in [
                 "prev_seed",
@@ -270,13 +269,14 @@ class neuron:
                 "encryption_payload",
             ]
         }
+        data = get_metadata_from_hash(synapse.data_hash, synapse.hotkey, self.database)
         if self.config.neuron.verbose:
             bt.logging.debug(f"update data retreived: {data}")
             bt.logging.debug(f"update entry: {pformat(entry)}")
 
         # Update the index with the new data
         # with self.db_semaphore:
-        bt.logging.trace(f"Acquired semaphore for database access.")
+
         if not data:
             bt.logging.trace(f"Updating index with new data...")
             # Add it to the index directly
@@ -573,7 +573,7 @@ class neuron:
         # Update event log with moving averaged scores
         event.moving_averaged_scores = self.moving_averaged_scores.tolist()
 
-        bt.logging.trace(f"Broadcasting update to all validators")
+        bt.logging.trace(f"Broadcasting storage update to all validators")
         tasks = [
             self.broadcast(hotkey, data_hash, data) for hotkey, data in broadcast_params
         ]
@@ -694,6 +694,10 @@ class neuron:
             data["counter"] += 1
             update_metadata_for_data_hash(hotkey, data_hash, data, self.database)
 
+        # Broadcast this update to the other validators.
+        bt.logging.trace(f"Broadcasting challenge update to all validators")
+        await self.broadcast(hotkey, data_hash, data)
+
         # Record the time taken for the challenge
         return verified, response
 
@@ -730,7 +734,9 @@ class neuron:
 
         if self.config.neuron.verbose and self.config.neuron.log_responses:
             [
-                bt.logging.trace(f"Challenge response {uid} | {response}")
+                bt.logging.trace(
+                    f"Challenge response {uid} | {pformat(response.axon.dict())}"
+                )
                 for uid, response in zip(uids, responses)
             ]
 
@@ -739,10 +745,11 @@ class neuron:
             len(responses), dtype=torch.float32
         ).to(self.device)
 
+        broadcast_params = []
         for idx, (uid, (verified, response)) in enumerate(zip(uids, responses)):
             if self.config.neuron.verbose:
                 bt.logging.trace(
-                    f"Challenge idx {idx} uid {uid} verified {verified} response {response}"
+                    f"Challenge idx {idx} uid {uid} verified {verified} response {pformat(response.axon.dict())}"
                 )
 
             hotkey = self.hotkeys[uid]
@@ -757,7 +764,7 @@ class neuron:
 
             # Apply reward for this challenge
             tier_factor = get_tier_factor(hotkey, self.database)
-            rewards[idx] = 1.0 * tier_factor if verified else -1.0 * tier_factor
+            rewards[idx] = 1.0 * tier_factor if verified else -0.25 * tier_factor
 
             # Log the event data for this specific challenge
             event.uids.append(uid)
@@ -825,6 +832,20 @@ class neuron:
         else:
             hotkeys = get_all_hotkeys_for_data_hash(data_hash, self.database)
 
+        bt.logging.debug(f"Hotkeys to query before: {hotkeys}".upper())
+        # Ensure we aren't calling any validtors
+        hotkeys = [
+            hotkey.decode("utf-8")
+            for hotkey in hotkeys
+            if check_uid_availability(
+                self.metagraph,
+                self.metagraph.hotkeys.index(
+                    hotkey.decode("utf-8") if isinstance(hotkey, bytes) else hotkey
+                ),
+                self.config.neuron.vpermit_tao_limit,
+            )
+        ]
+        bt.logging.debug(f"Hotkeys to query after: {hotkeys}".upper())
         bt.logging.info(f"Retrieving data with hash: {data_hash}")
 
         # Initialize event schema
@@ -852,9 +873,6 @@ class neuron:
         uids = []
         axons_to_query = []
         for hotkey in hotkeys:
-            hotkey = (
-                hotkey.decode("utf-8") if isinstance(hotkey, bytes) else hotkey
-            )  # ensure str
             if hotkey == self.wallet.hotkey.ss58_address:
                 continue  # skip querying yourself
             uid = self.metagraph.hotkeys.index(hotkey)
@@ -876,7 +894,7 @@ class neuron:
         )
         if self.config.neuron.verbose and self.config.neuron.log_responses:
             [
-                bt.logging.trace(f"Retrieve response: {uid} | {response}")
+                bt.logging.trace(f"Retrieve response: {uid} | {response.axon.dict()}")
                 for uid, response in zip(uids, responses)
             ]
         rewards: torch.FloatTensor = torch.zeros(
@@ -918,7 +936,9 @@ class neuron:
 
             success = verify_retrieve_with_seed(response)
             if not success:
-                bt.logging.error(f"data verification failed! {response}")
+                bt.logging.error(
+                    f"data verification failed! {pformat(response.axon.dict())}"
+                )
                 rewards[idx] = -1.0  # Losing use data is unacceptable, harsh punishment
 
                 # Update the retrieve statistics
@@ -985,19 +1005,20 @@ class neuron:
     async def forward(self) -> torch.Tensor:
         bt.logging.info(f"forward step: {self.step}")
 
-        try:
-            # Store some data
-            bt.logging.info("initiating store data")
-            event = await self.store_random_data()
+        if self.step % self.config.neuron.store_epoch_length == 0:
+            try:
+                # Store some data
+                bt.logging.info("initiating store data")
+                event = await self.store_random_data()
 
-            if self.config.neuron.verbose:
-                bt.logging.trace(f"STORE EVENT LOG: {event}")
+                if self.config.neuron.verbose:
+                    bt.logging.debug(f"STORE EVENT LOG: {event}")
 
-            # Log event
-            log_event(self, event)
+                # Log event
+                log_event(self, event)
 
-        except Exception as e:
-            bt.logging.error(f"Failed to store data with exception: {e}")
+            except Exception as e:
+                bt.logging.error(f"Failed to store data with exception: {e}")
 
         try:
             # Challenge some data
@@ -1005,7 +1026,7 @@ class neuron:
             event = await self.challenge()
 
             if self.config.neuron.verbose:
-                bt.logging.trace(f"CHALLENGE EVENT LOG: {event}")
+                bt.logging.debug(f"CHALLENGE EVENT LOG: {event}")
 
             # Log event
             log_event(self, event)
@@ -1022,7 +1043,7 @@ class neuron:
                         break
 
                 if self.config.neuron.verbose:
-                    bt.logging.trace(f"RETRIEVE EVENT LOG: {event}")
+                    bt.logging.debug(f"RETRIEVE EVENT LOG: {event}")
 
                 # Log event
                 log_event(self, event)
