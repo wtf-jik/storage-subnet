@@ -84,7 +84,7 @@ def add_args(cls, parser):
     )
     parser.add_argument(
         "--neuron.maxsize",
-        default=2**16,  # Use lognormal random gaussian if None (2**16, # 64KB)
+        default=None,  # Use lognormal random gaussian if None (2**16, # 64KB)
         type=int,
         help="Maximum size of random data to store.",
     )
@@ -232,6 +232,12 @@ def add_args(cls, parser):
         help="If set, we will log responses. These can be LONG.",
         default=False,
     )
+    parser.add_argument(
+        "--neuron.data_ttl",
+        type=int,
+        help="The number of blocks before data expires.",
+        default=50000,  # 7 days
+    )
 
     # Redis arguments
     parser.add_argument(
@@ -241,7 +247,7 @@ def add_args(cls, parser):
         "--database.port", default=6379, help="The port of the redis database."
     )
     parser.add_argument(
-        "--database.index", default=1, help="The database number of the redis database."
+        "--database.index", default=3, help="The database number of the redis database."
     )
 
     # Wandb args

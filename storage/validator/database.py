@@ -17,8 +17,10 @@
 # DEALINGS IN THE SOFTWARE.
 
 import json
+import redis
 import asyncio
 import bittensor as bt
+from typing import Dict, List, Any, Union, Optional, Tuple
 
 
 # Function to add metadata to a hash in Redis
@@ -130,7 +132,7 @@ def get_all_data_hashes(database):
             data_hash = data_hash.decode("utf-8")
             if data_hash not in data_hash_to_hotkeys:
                 data_hash_to_hotkeys[data_hash] = []
-            data_hash_to_hotkeys[data_hash].append(hotkey)
+            data_hash_to_hotkeys[data_hash].append(hotkey.decode("utf-8"))
 
     return data_hash_to_hotkeys
 
@@ -223,8 +225,41 @@ def calculate_total_network_storage(database):
     total_storage = 0
     # Iterate over all hotkeys
     for hotkey in database.scan_iter("*"):
-        if hotkey.startswith("stats:"):
+        if hotkey.startswith(b"stats:"):
             continue
         # Grab storage for that hotkey
-        total_storage += calculate_total_hotkey_storage(database, hotkey)
+        total_storage += calculate_total_hotkey_storage(hotkey, database)
     return total_storage
+
+
+def get_miner_statistics(database: redis.Redis) -> Dict[str, Dict[str, str]]:
+    """
+    Retrieves statistics for all miners in the database.
+    Parameters:
+        database (redis.Redis): The Redis client instance.
+    Returns:
+        A dictionary where keys are hotkeys and values are dictionaries containing the statistics for each hotkey.
+    """
+    return {
+        key.decode("utf-8").split(":")[-1]: {
+            k.decode("utf-8"): v.decode("utf-8")
+            for k, v in database.hgetall(key).items()
+        }
+        for key in database.scan_iter(b"stats:*")
+    }
+
+
+def get_redis_db_size(database: redis.Redis) -> int:
+    """
+    Calculates the total approximate size of all keys in a Redis database.
+    Parameters:
+        database (int): Redis database
+    Returns:
+        int: Total size of all keys in bytes
+    """
+    total_size = 0
+    for key in database.scan_iter("*"):
+        size = database.execute_command("MEMORY USAGE", key)
+        if size:
+            total_size += size
+    return total_size
