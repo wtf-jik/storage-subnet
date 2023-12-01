@@ -46,9 +46,15 @@ from storage.shared.utils import (
 from storage.validator.utils import (
     make_random_file,
     get_random_chunksize,
-    select_subset_uids,
     check_uid_availability,
     get_random_uids,
+    get_query_miners,
+    get_available_query_miners,
+    get_current_validtor_uid_round_robin,
+    get_current_validator_uid_pseudorandom,
+    compute_chunk_distribution_mut_exclusive,
+    compute_chunk_distribution_mut_exclusive_numpy,
+    compute_chunk_distribution_mut_exclusive_numpy_reuse_uids,
 )
 
 from storage.validator.encryption import (
@@ -85,14 +91,17 @@ from storage.validator.weights import (
 
 from storage.validator.database import (
     add_metadata_to_hotkey,
-    get_metadata_from_hash,
-    get_all_data_for_hotkey,
-    get_all_data_hashes,
-    get_all_hotkeys_for_data_hash,
+    get_miner_statistics,
+    get_metadata_for_hotkey,
+    total_network_storage,
+    store_chunk_metadata,
+    store_file_chunk_mapping_ordered,
+    get_metadata_for_hotkey_and_hash,
     update_metadata_for_data_hash,
+    get_all_chunk_hashes,
+    get_ordered_metadata,
     hotkey_at_capacity,
     get_miner_statistics,
-    calculate_total_network_storage,
 )
 
 from storage.validator.bonding import (
@@ -178,7 +187,7 @@ class neuron:
         self.database = redis.StrictRedis(
             host=self.config.database.host,
             port=self.config.database.port,
-            db=self.config.database.index,
+            db=6,  # self.config.database.index,
         )
         self.db_semaphore = asyncio.Semaphore()
 
@@ -196,19 +205,13 @@ class neuron:
         try:
             self.axon = bt.axon(wallet=self.wallet, config=self.config)
 
-            self.axon.attach(
-                forward_fn=self.retrieve_user_data,
-            ).attach(
-                forward_fn=self.store_user_data,
-            ).attach(
-                forward_fn=self.update_index,
-            )
-
             try:
                 self.subtensor.serve_axon(
                     netuid=self.config.netuid,
                     axon=self.axon,
                 )
+                del self.axon
+
             except Exception as e:
                 bt.logging.error(f"Failed to serve Axon with exception: {e}")
                 pass
@@ -216,14 +219,6 @@ class neuron:
         except Exception as e:
             bt.logging.error(f"Failed to create Axon initialize with exception: {e}")
             pass
-
-        # Start  starts the validator's axon, making it active on the network.
-        bt.logging.info(f"Starting axon server on port: {self.config.axon.port}")
-        self.axon.start()
-
-        bt.logging.info(
-            f"Served axon {self.axon} on network: {self.subtensor.chain_endpoint} with netuid: {self.config.netuid}"
-        )
 
         # Dendrite pool for querying the network.
         bt.logging.debug("loading", "dendrite_pool")
@@ -252,162 +247,6 @@ class neuron:
 
         self.prev_step_block = ttl_get_block(self)
         self.step = 0
-
-    async def update_index(self, synapse: protocol.Update) -> protocol.Update:
-        """
-        Updates the validator's index with new data received from a synapse.
-
-        Parameters:
-        - synapse (protocol.Update): The synapse object containing the update information.
-        """
-        # Only allow updates from verified validators
-        validator_hotkeys = self.get_query_validators(return_hotkeys=True)
-        if synapse.dendrite.hotkey not in validator_hotkeys:
-            bt.logging.error(
-                f"Received update from non-validator hotkey: {synapse.hotkey}"
-            )
-            return
-
-        entry = {
-            k: v
-            for k, v in synapse.dict().items()
-            if k
-            in [
-                "prev_seed",
-                "size",
-                "counter",
-                "encryption_payload",
-            ]
-        }
-
-        if self.config.neuron.verbose:
-            bt.logging.debug(f"update data retreived: {data}")
-            bt.logging.debug(f"update entry: {pformat(entry)}")
-
-        # Update the index with the new data
-        bt.logging.trace(
-            f"Updating index for hotkey: {synapse.hotkey} and data_hash: {synapse.data_hash}"
-        )
-
-        data = get_metadata_from_hash(synapse.data_hash, synapse.hotkey, self.database)
-        if not data:
-            bt.logging.trace(f"Updating index with new data...")
-            # Add it to the index directly
-            add_metadata_to_hotkey(
-                synapse.axon.hotkey, synapse.data_hash, entry, self.database
-            )
-            synapse.updated = True
-        else:
-            # Check for conflicts
-            bt.logging.trace(f"checking for conflicts...")
-            local_entry = json.loads(database.get(synapse.key))
-            if local_entry["counter"] > synapse.counter:
-                bt.logging.trace(f"Local entry has a higher counter, skipping...")
-                # Do nothing, we have a newer or current version
-                synapse.updated = False
-            else:
-                bt.logging.trace(f"Updating index with existing data...")
-                # Update the index to the latest data
-                update_metadata_for_data_hash(
-                    synapse.axon.hotkey, synapse.data_hash, entry, self.database
-                )
-                synapse.updated = True
-
-        bt.logging.trace(f"Successfully updated index.")
-        return synapse
-
-    def get_query_validators(self, return_hotkeys=False):
-        # Determine axons to query from metagraph
-        vpermits = self.metagraph.validator_permit
-        vpermit_uids = [uid for uid, permit in enumerate(vpermits) if permit]
-        vpermit_uids = torch.where(vpermits)[0]
-        # Exclude your own uid
-        vpermit_uids = vpermit_uids[
-            vpermit_uids
-            != self.metagraph.hotkeys.index(self.wallet.hotkey.ss58_address)
-        ]
-        query_idxs = torch.where(
-            self.metagraph.S[vpermit_uids] > self.config.neuron.broadcast_stake_limit
-        )[0]
-        query_uids = vpermit_uids[query_idxs]
-
-        return (
-            [self.metagraph.hotkeys[uid] for uid in query_uids]
-            if return_hotkeys
-            else query_uids
-        )
-
-    async def broadcast(self, hotkey, data_hash, data):
-        """
-        Broadcasts updates to all validators on the network for creating or updating an index value.
-        Parameters:
-        - hotkey: The key associated with the data to broadcast.
-        - data_hash: The hash of the data to broadcast.
-        - data: The metadata to be broadcast to other validators.
-        """
-        bt.logging.trace("broadcasting data.")
-        # Determine axons to query from metagraph
-        query_uids = self.get_query_validators()
-        axons = [self.metagraph.axons[uid] for uid in query_uids]
-
-        if self.config.neuron.verbose:
-            bt.logging.debug(f"Broadcasting to uids : {query_uids}")
-            bt.logging.debug(f"Broadcasting to axons: {axons}")
-
-        # Create synapse store
-        synapse = protocol.Update(
-            hotkey=hotkey,
-            data_hash=data_hash,
-            prev_seed=data["prev_seed"],
-            size=data["size"],
-            counter=data["counter"],
-            encryption_payload=data["encryption_payload"],
-        )
-        if self.config.neuron.verbose:
-            bt.logging.debug(f"Update synapse sending: {pformat(synapse.dict())}")
-
-        # Send synapse to all validator axons
-        responses = await self.dendrite(
-            axons,
-            synapse,
-            deserialize=False,
-        )
-        if self.config.neuron.verbose:
-            bt.logging.debug(f"Responses update: {responses}")
-
-        # TODO: Check the responses to ensure all validaors are updated
-
-    async def store_user_data(self, synapse: protocol.StoreUser) -> protocol.StoreUser:
-        """
-        Stores user encrypted data in the network.
-
-        Parameters:
-        - synapse (protocol.StoreUser): The synapse object containing the encrypted data.
-
-        Returns:
-        - The result of the store_data method.
-        """
-        bt.logging.trace(f"In store_user_data.")
-        # Store user data with the user's wallet as encryption key
-        event = await self.store_encrypted_data(
-            encrypted_data=base64.b64decode(synapse.encrypted_data),
-            encryption_payload=synapse.encryption_payload,
-        )
-        bt.logging.debug(f"Finished store_encrypted_data... event: {event}")
-        if any(event.successful):
-            synapse.data_hash = hash_data(base64.b64decode(synapse.encrypted_data))
-            if self.config.neuron.verbose:
-                bt.logging.debug(
-                    f"synapse.encrypted_data  : {synapse.encrypted_data[:200]}"
-                )
-                bt.logging.debug(
-                    f"synapse.b64 decoded data: {base64.b64decode(synapse.encrypted_data)[:200]}"
-                )
-                bt.logging.debug(f"stored user data w/ hash: {synapse.data_hash}")
-        else:
-            bt.logging.error(f"Failed to store user data")
-
-        return synapse
 
     async def store_encrypted_data(
         self,
@@ -462,17 +301,17 @@ class neuron:
         )
 
         # Select subset of miners to query (e.g. redunancy factor of N)
-        uids = get_random_uids(self, k=self.config.neuron.store_redundancy)
+        uids = get_available_query_miners(self, k=self.config.neuron.store_redundancy)
+        bt.logging.debug(f"store uids: {uids}")
         # Check each UID/axon to ensure it's not at it's storage capacity (e.g. 1TB)
         # before sending another storage request (do not allow higher than tier allow)
         # TODO: keep selecting UIDs until we get N that are not at capacity
         avaialble_uids = [
             uid
             for uid in uids
-            if not hotkey_at_capacity(self.metagraph.hotkeys[uid], self.database)
+            if not hotkey_at_capacity(self.hotkeys[uid], self.database)
         ]
 
-        broadcast_params = []
         axons = [self.metagraph.axons[uid] for uid in avaialble_uids]
         failed_uids = [None]
 
@@ -487,6 +326,7 @@ class neuron:
                 axons,
                 synapse,
                 deserialize=False,
+                timeout=self.config.neuron.store_timeout,
             )
 
             # Log the results for monitoring purposes.
@@ -502,6 +342,8 @@ class neuron:
                 len(responses), dtype=torch.float32
             ).to(self.device)
 
+            # TODO: Add proper error logging, e.g. if we timeout, raise/show timeout error instead of
+            # uniform "failed to verify" error (it doesn't give any context for what may have happened)
             for idx, (uid, response) in enumerate(zip(uids, responses)):
                 # Verify the commitment
                 hotkey = self.metagraph.hotkeys[uid]
@@ -515,7 +357,6 @@ class neuron:
                     response_storage = {
                         "prev_seed": synapse.seed,
                         "size": sys.getsizeof(encrypted_data),
-                        "counter": 0,
                         "encryption_payload": encryption_payload,
                     }
                     bt.logging.trace(
@@ -537,9 +378,6 @@ class neuron:
                     bt.logging.debug(
                         f"Stored data in database with key: {hotkey} | {data_hash}"
                     )
-
-                    # Collect broadcast params to send the update to all other validators
-                    broadcast_params.append((hotkey, response_storage))
 
                 else:
                     bt.logging.error(
@@ -587,8 +425,7 @@ class neuron:
             # Get a new set of UIDs to query for those left behind
             if failed_uids != []:
                 bt.logging.trace(f"Failed to store on uids: {failed_uids}")
-                uids = get_random_uids(self, k=len(failed_uids))
-
+                uids = get_available_query_miners(self, k=len(failed_uids))
                 bt.logging.trace(f"Retrying with new uids: {uids}")
                 axons = [self.metagraph.axons[uid] for uid in uids]
                 failed_uids = []  # reset failed uids for next round
@@ -606,12 +443,6 @@ class neuron:
 
         # Update event log with moving averaged scores
         event.moving_averaged_scores = self.moving_averaged_scores.tolist()
-
-        bt.logging.trace(f"Broadcasting storage update to all validators")
-        tasks = [
-            self.broadcast(hotkey, data_hash, data) for hotkey, data in broadcast_params
-        ]
-        await asyncio.gather(*tasks)
 
         return event
 
@@ -657,7 +488,8 @@ class neuron:
         if self.config.neuron.verbose:
             bt.logging.trace(f"Handling challenge from hotkey: {hotkey}")
 
-        keys = self.database.hkeys(hotkey)
+        keys = self.database.hkeys(f"hotkey:{hotkey}")
+        bt.logging.debug(f"{len(keys)} hashes pulled for hotkey {hotkey}")
         if keys == []:
             # Create a dummy response to send back
             dummy_response = protocol.Challenge(
@@ -674,7 +506,7 @@ class neuron:
             ]  # no data found associated with this miner hotkey
 
         data_hash = random.choice(keys).decode("utf-8")
-        data = get_metadata_from_hash(hotkey, data_hash, self.database)
+        data = get_metadata_for_hotkey_and_hash(hotkey, data_hash, self.database)
 
         if self.config.neuron.verbose:
             bt.logging.trace(f"Challenge lookup key: {data_hash}")
@@ -727,12 +559,7 @@ class neuron:
 
         if verified:
             data["prev_seed"] = synapse.seed
-            data["counter"] += 1
             update_metadata_for_data_hash(hotkey, data_hash, data, self.database)
-
-        # Broadcast this update to the other validators.
-        bt.logging.trace(f"Broadcasting challenge update to all validators")
-        await self.broadcast(hotkey, data_hash, data)
 
         # Record the time taken for the challenge
         return verified, response
@@ -760,9 +587,10 @@ class neuron:
 
         start_time = time.time()
         tasks = []
-        uids = get_random_uids(
-            self, k=min(self.metagraph.n, self.config.neuron.challenge_sample_size)
+        uids = get_available_query_miners(
+            self, k=self.config.neuron.challenge_sample_size
         )
+        bt.logging.debug(f"challenge uids {uids}")
         responses = []
         for uid in uids:
             tasks.append(asyncio.create_task(self.handle_challenge(uid)))
@@ -781,7 +609,6 @@ class neuron:
             len(responses), dtype=torch.float32
         ).to(self.device)
 
-        broadcast_params = []
         for idx, (uid, (verified, response)) in enumerate(zip(uids, responses)):
             if self.config.neuron.verbose:
                 bt.logging.trace(
@@ -832,25 +659,51 @@ class neuron:
 
         return event
 
-    async def retrieve_user_data(
-        self, synapse: protocol.RetrieveUser
-    ) -> protocol.RetrieveUser:
-        bt.logging.trace(f"inside retrieve_user_data")
-        bt.logging.debug(f"looking up user data with hash: {synapse.data_hash}")
+    async def handle_retrieve(self, uid):
+        bt.logging.debug(f"handle_retrieve uid: {uid}")
+        hotkey = self.hotkeys[uid]
+        keys = self.database.hkeys(f"hotkey:{hotkey}")
 
-        # Return the data to the client so that they can decrypt with their bittensor wallet
-        async for (encrypted_data, encryption_payload) in self.retrieve(
-            synapse.data_hash, yield_event=False
-        ):
-            bt.logging.debug(f"recieved encrypted_Data {encrypted_data[:200]}")
-            if encrypted_data == None:
-                break
+        if keys == []:
+            # TODO: make this legit and return something useful...
+            bt.logging.warning(f"No data found for uid: {uid} | hotkey: {hotkey}")
+            # Create a dummy response to send back
+            return False
 
-            # Return the first element, whoever is fastest wins
-            synapse.encrypted_data = encrypted_data
-            synapse.encryption_payload = encryption_payload
+        data_hash = random.choice(keys).decode("utf-8")
+        bt.logging.debug(f"handle_retrieve data_hash: {data_hash}")
 
-        return synapse
+        data = get_metadata_for_hotkey_and_hash(hotkey, data_hash, self.database)
+        axon = self.metagraph.axons[uid]
+
+        synapse = protocol.Retrieve(
+            data_hash=data_hash,
+            seed=get_random_bytes(32).hex(),
+        )
+        response = await self.dendrite(
+            [axon],
+            synapse,
+            deserialize=False,
+        )
+
+        try:
+            bt.logging.trace(f"Fetching AES payload from UID: {uid}")
+
+            # Load the data for this miner from validator storage
+            data = get_metadata_for_hotkey_and_hash(hotkey, data_hash, self.database)
+
+            # If we reach here, this miner has passed verification. Update the validator storage.
+            data["prev_seed"] = synapse.seed
+            update_metadata_for_data_hash(hotkey, data_hash, data, self.database)
+            bt.logging.trace(
+                f"Updated metadata for UID: {uid} with data: {pformat(data)}"
+            )
+            # TODO: get a temp link from the server to send back to the client instead
+
+        except Exception as e:
+            bt.logging.error(f"Failed to retrieve data from UID: {uid} with error: {e}")
+
+        return response[0], data_hash
 
     async def retrieve(
         self, data_hash: str = None, yield_event: bool = True
@@ -864,27 +717,6 @@ class neuron:
         Returns:
             The retrieved data if the verification is successful.
         """
-
-        if data_hash == None:
-            hashes_dict = get_all_data_hashes(self.database)
-            hashes = list(hashes_dict.keys())
-            data_hash = random_choice(hashes)
-            hotkeys = hashes_dict[data_hash]
-        else:
-            hotkeys = get_all_hotkeys_for_data_hash(data_hash, self.database)
-
-        # Ensure we aren't calling any validtors
-        hotkeys = [
-            hotkey
-            for hotkey in hotkeys
-            if check_uid_availability(
-                self.metagraph,
-                self.metagraph.hotkeys.index(hotkey),
-                self.config.neuron.vpermit_tao_limit,
-            )
-        ]
-        bt.logging.trace(f"Hotkeys to query: {hotkeys}")
-        bt.logging.info(f"Retrieving data with hash: {data_hash}")
 
         # Initialize event schema
         event = EventSchema(
@@ -904,41 +736,37 @@ class neuron:
 
         start_time = time.time()
 
-        # fetch which miners have the data
-        uids = []
-        axons_to_query = []
-        for hotkey in hotkeys:
-            if hotkey == self.wallet.hotkey.ss58_address:
-                continue  # skip querying yourself
-            uid = self.metagraph.hotkeys.index(hotkey)
-            axons_to_query.append(self.metagraph.axons[uid])
-            uids.append(uid)
-            if self.config.neuron.verbose:
-                bt.logging.trace(f"appending hotkey: {hotkey}")
+        uids = get_available_query_miners(
+            self, k=self.config.neuron.challenge_sample_size
+        )
 
-        # query all N (from redundancy factor) with M challenges (x% of the total data)
-        # see who returns the data fastest (passes verification), and rank them highest
-        synapse = protocol.Retrieve(
-            data_hash=data_hash,
-            seed=get_random_bytes(32).hex(),
-        )
-        responses = await self.dendrite(
-            axons_to_query,
-            synapse,
-            deserialize=False,
-        )
+        # Ensure that each UID has data to retreive. If not, skip it.
+        uids = [
+            uid
+            for uid in uids
+            if get_metadata_for_hotkey(self.hotkeys[uid], self.database) != {}
+        ]
+        bt.logging.debug(f"UIDs to query: {uids}")
+        bt.logging.debug(f"Hotkeys to query: {[self.hotkeys[uid] for uid in uids]}")
+
+        tasks = []
+        for uid in uids:
+            tasks.append(asyncio.create_task(self.handle_retrieve(uid)))
+        response_tuples = await asyncio.gather(*tasks)
+
         if self.config.neuron.verbose and self.config.neuron.log_responses:
             [
                 bt.logging.trace(
                     f"Retrieve response: {uid} | {pformat(response.dendrite.dict())}"
                 )
-                for uid, response in zip(uids, responses)
+                for uid, (response, _) in zip(uids, response_tuples)
             ]
         rewards: torch.FloatTensor = torch.zeros(
-            len(responses), dtype=torch.float32
+            len(response_tuples), dtype=torch.float32
         ).to(self.device)
 
-        for idx, (uid, response) in enumerate(zip(uids, responses)):
+        for idx, (uid, (response, data_hash)) in enumerate(zip(uids, response_tuples)):
+            hotkey = self.hotkeys[uid]
             try:
                 decoded_data = base64.b64decode(response.data)
             except Exception as e:
@@ -989,9 +817,7 @@ class neuron:
                 continue  # skip trying to decode the data
             else:
                 # Success. Reward based on miner tier
-                tier_factor = get_tier_factor(
-                    self.metagraph.hotkeys[uid], self.database
-                )
+                tier_factor = get_tier_factor(hotkey, self.database)
                 rewards[idx] = 1.0 * tier_factor
 
             event.uids.append(uid)
@@ -1001,33 +827,11 @@ class neuron:
             event.task_status_codes.append(response.dendrite.status_code)
             event.rewards.append(rewards[idx].item())
 
-            try:
-                bt.logging.trace(f"Fetching AES payload from UID: {uids[idx]}")
-
-                # Load the data for this miner from validator storage
-                data = get_metadata_from_hash(hotkey, data_hash, self.database)
-
-                # If we reach here, this miner has passed verification. Update the validator storage.
-                data["prev_seed"] = synapse.seed
-                data["counter"] += 1
-                update_metadata_for_data_hash(hotkey, data_hash, data, self.database)
-                bt.logging.trace(
-                    f"Updated metadata for UID: {uids} with data: {pformat(data)}"
-                )
-
-                # TODO: get a temp link from the server to send back to the client instead
-                yield response.data, data["encryption_payload"]
-
-            except Exception as e:
-                bt.logging.error(
-                    f"Failed to yield data from UID: {uids} with error: {e}"
-                )
-
         bt.logging.trace("Applying retrieve rewards")
         apply_reward_scores(
             self,
             uids,
-            responses,
+            [response_tuple[0] for response_tuple in response_tuples],
             rewards,
             timeout=self.config.neuron.retrieve_timeout,
             mode="minmax",
@@ -1039,28 +843,237 @@ class neuron:
             event.best_uid = event.uids[best_index]
             event.best_hotkey = self.metagraph.hotkeys[event.best_uid]
 
-        if yield_event:
-            yield event  # finally yield the event
-        else:
-            None, None
+        return event
+
+    async def store_broadband(self, data, R=3, k=10):
+        """
+        Stores data on the network and ensures it is correctly committed by the miners.
+
+        Uses a semaphore to restrict the number of concurrent requests to the network.
+
+        Stores chunks in groups of R, and queries k miners for each chunk.
+
+        Basic algorthim:
+            - Split data into chunks
+            - Compute chunk distribution
+            - For each chunk:
+                - Select R miners to store the chunk
+            - Verify the response from each miner
+            - Store the data for each verified response
+
+        Parameters:
+            data: bytes
+                The data to be stored.
+            R: int
+                The redundancy factor for the data storage.
+            k: int
+                The target number of miners to query for each chunk.
+        """
+        semaphore = asyncio.Semaphore(3)
+
+        # TODO: add a retry mechanism like with store_encrypted_data
+        # TODO: how will you handle encryption here? (if at all)
+        async def store_chunk_group(chunk_hash, chunk, uids):
+            g, h = setup_CRS(curve=self.config.neuron.curve)
+
+            b64_encoded_chunk = base64.b64encode(chunk).decode("utf-8")
+
+            synapse = protocol.Store(
+                encrypted_data=b64_encoded_chunk,
+                curve=self.config.neuron.curve,
+                g=ecc_point_to_hex(g),
+                h=ecc_point_to_hex(h),
+                seed=get_random_bytes(32).hex(),
+            )
+
+            # TODO: do this more elegantly, possibly reroll with fresh miner
+            # uids to get back to redundancy factor R before querying
+            uids = [
+                uid
+                for uid in uids
+                if not hotkey_at_capacity(self.hotkeys[uid], self.database)
+            ]
+
+            axons = [self.metagraph.axons[uid] for uid in uids]
+            responses = await self.dendrite(
+                axons,
+                synapse,
+                deserialize=False,
+                timeout=60,
+            )
+
+            return responses
+
+        tasks = []
+        chunks = []
+        chunk_hashes = []
+        uids_nested = []
+        full_hash = hash_data(data)
+        full_size = sys.getsizeof(data)
+        async with semaphore:
+            # TODO: Don't yield chunks, this is slow an inefficient. Precompute then slice.
+            for i, dist in enumerate(
+                compute_chunk_distribution_mut_exclusive_numpy_reuse_uids(
+                    self, data, R, k
+                )
+            ):
+                bt.logging.debug(f"Chunk {i} | uid distribution: {dist['uids']}")
+                chunks.append(dist["chunk"])
+                uids_nested.append(dist["uids"])
+                chunk_hashes.append(dist["chunk_hash"])
+                tasks.append(
+                    asyncio.create_task(
+                        store_chunk_group(
+                            dist["chunk_hash"], dist["chunk"], dist["uids"]
+                        )
+                    )
+                )
+            responses_nested = await asyncio.gather(*tasks)
+
+        for i, (uids, responses, chunk, chunk_hash) in enumerate(
+            zip(uids_nested, responses_nested, chunks, chunk_hashes)
+        ):
+            chunk_size = sys.getsizeof(chunk)
+
+            store_chunk_metadata(
+                full_hash,
+                chunk_hash,
+                [self.hotkeys[uid] for uid in uids],
+                chunk_size,
+                self.database,
+            )
+
+            for uid, response in zip(uids, responses):
+                verified = verify_store_with_seed(response)
+                if verified:
+                    # Prepare storage for the data for particular miner
+                    response_storage = {
+                        "prev_seed": response.seed,
+                        "size": chunk_size,
+                    }
+                    # Store in the database according to the data hash and the miner hotkey
+                    add_metadata_to_hotkey(
+                        self.hotkeys[uid],
+                        chunk_hash,
+                        response_storage,  # seed + size
+                        self.database,
+                    )
+                    bt.logging.debug(
+                        f"Stored data in database for uid: {uid} | {str(chunk_hash)}"
+                    )
+                else:
+                    bt.logging.error(
+                        f"Failed to verify store commitment from UID: {uid}"
+                    )
+
+                # Update the storage statistics
+                update_statistics(
+                    ss58_address=self.hotkeys[uid],
+                    success=verified,
+                    task_type="store",
+                    database=self.database,
+                )
+
+        # Update the chunk hash mapping for this entire file
+        store_file_chunk_mapping_ordered(
+            full_hash=full_hash,
+            chunk_hashes=chunk_hashes,
+            chunk_indices=list(range(len(chunks))),
+            database=self.database,
+        )
+
+    async def retrieve_broadband(self, full_hash: str):
+        """
+        Retrieves and verifies data from the network, ensuring integrity and correctness of the data associated with the given hash.
+
+        Parameters:
+            data_hash (str): The hash of the data to be retrieved.
+
+        Returns:
+            The retrieved data if the verification is successful.
+        """
+        semaphore = asyncio.Semaphore(3)
+
+        async def retrieve_chunk_group(chunk_hash, uids):
+            synapse = protocol.Retrieve(
+                data_hash=chunk_hash,
+                seed=get_random_bytes(32).hex(),
+            )
+
+            axons = [self.metagraph.axons[uid] for uid in uids]
+            responses = await self.dendrite(
+                axons,
+                synapse,
+                deserialize=False,
+                timeout=60,
+            )
+
+            return responses
+
+        # Get the chunks you need to reconstruct IN order
+        ordered_metadata = get_ordered_metadata(full_hash, self.database)
+        if ordered_metadata == []:
+            bt.logging.error(f"No metadata found for full hash: {full_hash}")
+            return None
+
+        # Get the hotkeys/uids to query
+        tasks = []
+        total_size = 0
+        bt.logging.debug(f"ordered metadata: {ordered_metadata}")
+        for chunk_metadata in ordered_metadata:
+            uids = [self.hotkeys.index(hotkey) for hotkey in chunk_metadata["hotkeys"]]
+            total_size += chunk_metadata["size"]
+            tasks.append(
+                asyncio.create_task(
+                    retrieve_chunk_group(chunk_metadata["chunk_hash"], uids)
+                )
+            )
+        responses = await asyncio.gather(*tasks)
+
+        chunks = {}
+        for i, response_group in enumerate(responses):
+            for response in response_group:
+                verified = verify_retrieve_with_seed(response)
+                if verified:
+                    # Add to final chunks dict
+                    if i not in list(chunks.keys()):
+                        chunks[i] = base64.b64decode(response.data)
+                else:
+                    bt.logging.error(
+                        f"Failed to verify store commitment from UID: {uid}"
+                    )
+
+        # Reconstruct the data
+        data = b"".join(chunks.values())
+
+        if total_size != sys.getsizeof(data):
+            bt.logging.warning(
+                f"Data reconstruction has different size than metadata: {total_size} != {sys.getsizeof(data)}"
+            )
+
+        return data
 
     async def forward(self) -> torch.Tensor:
         bt.logging.info(f"forward step: {self.step}")
 
-        if self.step % self.config.neuron.store_epoch_length == 0:
-            try:
-                # Store some data
-                bt.logging.info("initiating store data")
-                event = await self.store_random_data()
+        try:
+            # Store some random data
+            bt.logging.info("initiating store random")
+            event = await self.store_random_data()
 
-                if self.config.neuron.verbose:
-                    bt.logging.debug(f"STORE EVENT LOG: {event}")
+            # Store some data with broadband protocol
+            bt.logging.info("initiating store broadband data")
+            data = os.urandom(1024 * 1024 * 100)  # 100MB test file
+            await self.store_broadband(data)
 
-                # Log event
-                log_event(self, event)
+            if self.config.neuron.verbose:
+                bt.logging.debug(f"STORE EVENT LOG: {event}")
 
-            except Exception as e:
-                bt.logging.error(f"Failed to store data with exception: {e}")
+            # Log event
+            log_event(self, event)
+
+        except Exception as e:
+            bt.logging.error(f"Failed to store data with exception: {e}")
 
         try:
             # Challenge some data
@@ -1076,42 +1089,52 @@ class neuron:
         except Exception as e:
             bt.logging.error(f"Failed to challenge data with exception: {e}")
 
-        if self.step % self.config.neuron.retrieve_epoch_length == 0:
-            try:
-                # Retrieve some data
-                bt.logging.info("initiating retrieve")
-                async for event in self.retrieve():
-                    if isinstance(event, EventSchema):
-                        break
+        try:
+            # Retrieve some data
+            bt.logging.info("initiating retrieve")
+            event = await self.retrieve()
 
-                if self.config.neuron.verbose:
-                    bt.logging.debug(f"RETRIEVE EVENT LOG: {event}")
+            if self.config.neuron.verbose:
+                bt.logging.debug(f"RETRIEVE EVENT LOG: {event}")
 
-                # Log event
-                log_event(self, event)
+            # Log event
+            log_event(self, event)
 
-            except Exception as e:
-                bt.logging.error(f"Failed to retrieve data with exception: {e}")
+            bt.logging.info("initiating retrieve broadband")
+            file_hash = random.choice(list(self.database.scan_iter(f"file:*")))
+            file_hash = file_hash.decode("utf-8").split(":")[1]
+            bt.logging.debug(f"Retrieving broadband data with hash: {file_hash}")
+            data = await self.retrieve_broadband(file_hash)
 
-        if self.step % self.config.neuron.compute_tiers_epoch_length == 0:
-            try:
-                # Update miner tiers
-                bt.logging.info("Computing tiers")
-                await compute_all_tiers(self.database)
+        except Exception as e:
+            bt.logging.error(f"Failed to retrieve data with exception: {e}")
 
-                # Fetch miner statistics and usage data.
-                stats = get_miner_statistics(self.database)
+        try:
+            # Update miner tiers
+            bt.logging.info("Computing tiers")
+            await compute_all_tiers(self.database)
 
-                # Log all hash <> hotkey pairs
-                hash_map = get_all_data_hashes(self.database)
+            # Fetch miner statistics and usage data.
+            stats = get_miner_statistics(self.database)
 
-                # Log the statistics and hashmap to wandb.
-                if not self.config.wandb.off:
-                    self.wandb.log(stats)
-                    self.wandb.log(hash_map)
+            # Log all chunk hash <> hotkey pairs
+            chunk_hash_map = get_all_chunk_hashes(self.database)
 
-            except Exception as e:
-                bt.logging.error(f"Failed to compute tiers with exception: {e}")
+            # Log the statistics and hashmap to wandb.
+            if not self.config.wandb.off:
+                self.wandb.log(stats)
+                self.wandb.log(chunk_hash_map)
+
+        except Exception as e:
+            bt.logging.error(f"Failed to compute tiers with exception: {e}")
+
+        # Update the total network storage
+        total_storage = total_network_storage(self.database)
+        bt.logging.info(f"Total network storage: {total_storage}")
+
+        # Log the total storage to wandb.
+        if not self.config.wandb.off:
+            self.wandb.log({"total_storage": total_storage})
 
         if self.step % 100:  # TODO: make this a hparam
             # Update the total network storage
@@ -1131,10 +1154,16 @@ class neuron:
 
                 # --- Wait until next step epoch.
                 current_block = self.subtensor.get_current_block()
-                while (
+                while self.my_subnet_uid != get_current_validtor_uid_round_robin(
+                    self,
+                    epoch_length=2,  # 2 for testing (interval for each validator slot)
+                ) and (
                     current_block - self.prev_step_block
                     < self.config.neuron.blocks_per_step
                 ):
+                    bt.logging.trace(
+                        f"my uid: {self.my_subnet_uid} - selected uid: {get_current_validtor_uid_round_robin(self, epoch_length=2)}"
+                    )
                     # --- Wait for next block.
                     time.sleep(1)
                     current_block = self.subtensor.get_current_block()
