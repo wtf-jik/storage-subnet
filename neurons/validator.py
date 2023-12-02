@@ -1063,7 +1063,7 @@ class neuron:
 
             # Store some data with broadband protocol
             bt.logging.info("initiating store broadband data")
-            data = os.urandom(1024 * 1024 * 100)  # 100MB test file
+            data = os.urandom(1024 * 1024 * 1024)  # 100MB test file
             await self.store_broadband(data)
 
             if self.config.neuron.verbose:
@@ -1109,36 +1109,29 @@ class neuron:
         except Exception as e:
             bt.logging.error(f"Failed to retrieve data with exception: {e}")
 
-        try:
-            # Update miner tiers
-            bt.logging.info("Computing tiers")
-            await compute_all_tiers(self.database)
+        if self.step % 10 == 0:
+            try:
+                # Update miner tiers
+                bt.logging.info("Computing tiers")
+                await compute_all_tiers(self.database)
 
-            # Fetch miner statistics and usage data.
-            stats = get_miner_statistics(self.database)
+                # Fetch miner statistics and usage data.
+                stats = get_miner_statistics(self.database)
 
-            # Log all chunk hash <> hotkey pairs
-            chunk_hash_map = get_all_chunk_hashes(self.database)
+                # Log all chunk hash <> hotkey pairs
+                chunk_hash_map = get_all_chunk_hashes(self.database)
 
-            # Log the statistics and hashmap to wandb.
-            if not self.config.wandb.off:
-                self.wandb.log(stats)
-                self.wandb.log(chunk_hash_map)
+                # Log the statistics and hashmap to wandb.
+                if not self.config.wandb.off:
+                    self.wandb.log(stats)
+                    self.wandb.log(chunk_hash_map)
 
-        except Exception as e:
-            bt.logging.error(f"Failed to compute tiers with exception: {e}")
-
-        # Update the total network storage
-        total_storage = total_network_storage(self.database)
-        bt.logging.info(f"Total network storage: {total_storage}")
-
-        # Log the total storage to wandb.
-        if not self.config.wandb.off:
-            self.wandb.log({"total_storage": total_storage})
+            except Exception as e:
+                bt.logging.error(f"Failed to compute tiers with exception: {e}")
 
         if self.step % 100:  # TODO: make this a hparam
             # Update the total network storage
-            total_storage = calculate_total_network_storage(self.database)
+            total_storage = total_network_storage(self.database)
             bt.logging.info(f"Total network storage: {total_storage}")
             # Log the total storage to wandb.
             if not self.config.wandb.off:

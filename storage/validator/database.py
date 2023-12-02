@@ -511,3 +511,38 @@ def get_ordered_metadata(
 
     ordered_chunks = sorted(chunks_info.items(), key=lambda x: x[0])
     return [chunk_info for _, chunk_info in ordered_chunks]
+
+
+# Function to grab mutually exclusiv UIDs for a specific full_hash (get chunks of non-overlapping UIDs)
+def retrieve_mutually_exclusive_hotkeys_full_hash(
+    full_hash: str, database: redis.Redis
+) -> Dict[str, List[str]]:
+    """
+    Retrieve a list of mutually exclusive hotkeys for a specific full hash.
+
+    This function retrieves the metadata for all chunks of a file and then sorts them based on their
+    indices to maintain the original file order. It then iterates over the chunks and adds the hotkeys
+    of each chunk to the dict of chunk hash <> mutually exclusive hotkey mappings if not already present.
+
+    Parameters:
+    - full_hash (str): The full hash of the file whose ordered metadata is to be retrieved.
+    - database (redis.Redis): An instance of the Redis database.
+
+    Returns:
+    - Dict[str, List[str]]: A dict of mutually exclusive hotkeys for each corresponding hash.
+      Returns None if no chunks are found.
+    """
+    chunks_info = get_all_chunks_for_file(full_hash, database)
+    if chunks_info is None:
+        return None
+
+    ordered_chunks = sorted(chunks_info.items(), key=lambda x: x[0])
+    mutually_exclusive_hotkeys = {}
+    for _, chunk_info in ordered_chunks:
+        if chunk_info["chunk_hash"] not in mutually_exclusive_hotkeys:
+            mutually_exclusive_hotkeys[chunk_info["chunk_hash"]] = []
+        for hotkey in chunk_info["hotkeys"]:
+            if hotkey not in mutually_exclusive_hotkeys[chunk_info["chunk_hash"]]:
+                mutually_exclusive_hotkeys[chunk_info["chunk_hash"]].append(hotkey)
+
+    return mutually_exclusive_hotkeys
