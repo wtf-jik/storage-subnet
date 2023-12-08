@@ -17,15 +17,18 @@
 # DEALINGS IN THE SOFTWARE.
 
 import os
+import math
+import time
 import torch
+import functools
 import numpy as np
 import multiprocessing
+import random as pyrandom
+
 from math import comb
+from Crypto.Random import random
 from itertools import combinations, cycle
 from typing import Dict, List, Any, Union, Optional, Tuple
-
-from Crypto.Random import random
-import random as pyrandom
 
 from ..shared.ecc import hex_to_ecc_point, ecc_point_to_hex, hash_data, ECCommitment
 from ..shared.merkle import MerkleTree
@@ -143,9 +146,31 @@ def check_uid_availability(
     return True
 
 
+def ttl_cache(maxsize=128, ttl=10):
+    """A simple TTL cache decorator for functions with a single argument."""
+
+    def wrapper_cache(func):
+        cache = functools.lru_cache(maxsize=maxsize)(func)
+        last_time = time.time()
+
+        @functools.wraps(func)
+        def wrapped_func(*args, **kwargs):
+            nonlocal last_time
+            current_time = time.time()
+            if current_time - last_time > ttl:
+                cache.cache_clear()
+                last_time = current_time
+            return cache(*args, **kwargs)
+
+        return wrapped_func
+
+    return wrapper_cache
+
+
+@ttl_cache(ttl=12)  # Cache TTL of 30 seconds
 def current_block_hash(subtensor):
     """
-    Get the current block hash.
+    Get the current block hash with caching.
 
     Args:
         subtensor (bittensor.subtensor.Subtensor): The subtensor instance to use for getting the current block hash.
@@ -185,12 +210,12 @@ def get_pseudorandom_uids(subtensor, uids, k):
 
     # Ensure k is not larger than the number of uids
     k = min(k, len(uids))
-    bt.logging.info(f"uids: {uids} k: {k}")
+    bt.logging.trace(f"uids: {uids} k: {k}")
 
     return pyrandom.sample(uids, k=k)
 
 
-def get_avaialble_uids(self):
+def get_available_uids(self, exclude: list = None):
     """Returns all available uids from the metagraph.
 
     Returns:
@@ -203,52 +228,15 @@ def get_avaialble_uids(self):
             self.metagraph, uid, self.config.neuron.vpermit_tao_limit
         )
 
-        if uid_is_available:
+        if uid_is_available and (exclude is None or uid not in exclude):
             avail_uids.append(uid)
 
     return avail_uids
 
 
-def get_random_uids_OG(
-    self, k: int, exclude: List[int] = [8, 9, 10, 11, 12, 13]
-) -> torch.LongTensor:
-    """Returns k available random uids from the metagraph.
-    Args:
-        k (int): Number of uids to return.
-        exclude (List[int]): List of uids to exclude from the random sampling.
-    Returns:
-        uids (torch.LongTensor): Randomly sampled available uids.
-    Notes:
-        If `k` is larger than the number of available `uids`, set `k` to the number of available `uids`.
-    """
-    candidate_uids = []
-    avail_uids = []
-
-    for uid in range(self.metagraph.n.item()):
-        uid_is_available = check_uid_availability(
-            self.metagraph, uid, self.config.neuron.vpermit_tao_limit
-        )
-        uid_is_not_excluded = exclude is None or uid not in exclude
-
-        if uid_is_available:
-            avail_uids.append(uid)
-            if uid_is_not_excluded:
-                candidate_uids.append(uid)
-
-    # Check if candidate_uids contain enough for querying, if not grab all avaliable uids
-    available_uids = candidate_uids
-    if len(candidate_uids) < k:
-        available_uids += random.sample(
-            [uid for uid in avail_uids if uid not in candidate_uids],
-            k - len(candidate_uids),
-        )
-    uids = torch.tensor(random.sample(available_uids, k))
-    bt.logging.debug(f"returning available uids: {uids}")
-    return uids.tolist()
-
-
+# TODO: update this to use the block hash seed paradigm so that we don't get uids that are unavailable
 def get_random_uids(
-    self, k: int, exclude: List[int] = [8, 9, 10, 11, 12, 13]
+    self, k: int, exclude: List[int] = None, seed: int = None
 ) -> torch.LongTensor:
     """Returns k available random uids from the metagraph.
     Args:
@@ -284,9 +272,11 @@ def get_random_uids(
 
     # Safeguard against trying to sample more than what is available
     num_to_sample = min(k, len(candidate_uids))
-    uids = torch.tensor(random.sample(candidate_uids, num_to_sample))
+    if seed:  # use block hash seed if provided
+        random.seed(seed)
+    uids = random.sample(candidate_uids, num_to_sample)
     bt.logging.debug(f"returning available uids: {uids}")
-    return uids.tolist()
+    return uids
 
 
 def get_all_validators(self, return_hotkeys=False):
@@ -327,7 +317,7 @@ def get_all_miners(self):
     return [uid.item() for uid in self.metagraph.uids if uid not in vuids]
 
 
-def get_query_miners(self, k=20):
+def get_query_miners(self, k=20, exlucde=None):
     """
     Obtain a list of miner UIDs selected pseudorandomly based on the current block hash.
 
@@ -339,6 +329,8 @@ def get_query_miners(self, k=20):
     """
     # Determine miner axons to query from metagraph with pseudorandom block_hash seed
     muids = get_all_miners(self)
+    if exlucde is not None:
+        muids = [muid for muid in muids if muid not in exlucde]
     return get_pseudorandom_uids(self.subtensor, muids, k=k)
 
 
@@ -356,7 +348,7 @@ def get_query_validators(self, k=3):
     return get_pseudorandom_uids(self.subtensor, uids=vuids.tolist(), k=k)
 
 
-async def get_available_query_miners(self, k):
+async def get_available_query_miners(self, k, exclude=None):
     """
     Obtain a list of available miner UIDs selected pseudorandomly based on the current block hash.
 
@@ -367,7 +359,7 @@ async def get_available_query_miners(self, k):
         list: A list of pseudorandomly selected available miner UIDs.
     """
     # Determine miner axons to query from metagraph with pseudorandom block_hash seed
-    muids = get_avaialble_uids(self)
+    muids = get_available_uids(self, exclude=exclude)
     muids_nonfull = [
         uid
         for uid in muids
@@ -389,18 +381,15 @@ def get_current_validator_uid_pseudorandom(self):
     return pyrandom.choice(vuids).item()
 
 
-def get_current_validtor_uid_round_robin(self, epoch_length=760):
+def get_current_validtor_uid_round_robin(self):
     """
-    Retrieve a validator UID using a round-robin selection based on the current block and a specified epoch length.
-
-    Args:
-        epoch_length (int): The length of an epoch, used to determine the validator index in a round-robin manner.
+    Retrieve a validator UID using a round-robin selection based on the current block and epoch length.
 
     Returns:
         int: The UID of the validator selected via round-robin.
     """
     vuids = get_all_validators(self)
-    vidx = self.subtensor.get_current_block() // epoch_length % len(vuids)
+    vidx = self.subtensor.get_current_block() // 100 % len(vuids)
     return vuids[vidx].item()
 
 
@@ -536,73 +525,6 @@ def optimal_chunk_size(
     return int(chunk_size)
 
 
-def optimal_chunk_size2(data_size, num_available_uids, R):
-    """
-    Calculates an optimal chunk size for data distribution based on the total data size,
-    the number of available UIDs, and the desired redundancy factor. This version of the
-    function aims to balance the number of data chunks against the total number of
-    unique combinations of UIDs that can be formed.
-
-    Args:
-        data_size (int): The total size of the data to be distributed, in bytes.
-        num_available_uids (int): The total number of unique UIDs available for distribution.
-        R (int): The desired redundancy factor, indicating how many UIDs are assigned to each chunk.
-
-    Returns:
-        int: The calculated optimal size for each data chunk, in bytes. If the calculated
-             number of chunks is zero (indicating a very small data size), the function returns
-             the entire data size.
-
-    Note:
-        This function is designed to ensure a balanced distribution of data across the available UIDs,
-        considering the total number of possible unique combinations that can be formed with the UIDs.
-    """
-    total_combinations = comb(num_available_uids, R)
-    max_chunks = min(data_size // MIN_CHUNK_SIZE, total_combinations)
-
-    if max_chunks == 0:
-        return data_size  # Return the entire data size if it's too small
-
-    return data_size // max_chunks
-
-
-def optimal_chunk_size3(
-    data_size, num_available_uids, R, max_chunk_size=MAX_CHUNK_SIZE
-):
-    """
-    Calculates an optimal chunk size for data distribution, aiming to maximize the chunk size
-    while respecting a maximum limit. This function considers the total data size, the number of
-    available UIDs, and the desired redundancy factor. The goal is to use the available UIDs
-    efficiently by forming the maximum number of unique UID groups.
-
-    Args:
-        data_size (int): The total size of the data to be distributed, in bytes.
-        num_available_uids (int): The total number of unique UIDs available for distribution.
-        R (int): The desired redundancy factor, indicating how many UIDs are assigned to each chunk.
-        max_chunk_size (int, optional): The maximum allowed size for each data chunk, in bytes.
-
-    Returns:
-        int: The calculated optimal size for each data chunk, in bytes. The chunk size is
-             constrained by the maximum chunk size and is calculated to efficiently use
-             the available UIDs for the specified redundancy factor.
-
-    Note:
-        This function is particularly useful for scenarios where the data size is large, and
-        the goal is to maximize the utilization of each data chunk while ensuring each UID
-        set is used efficiently and not more frequently than necessary.
-    """
-    # Calculate the maximum number of unique UID groups
-    num_uid_groups = num_available_uids // R
-
-    # Estimate the ideal chunk size based on the data size and the number of UID groups
-    ideal_chunk_size = data_size / num_uid_groups
-
-    # Ensure the chunk size is within the maximum limit
-    chunk_size = min(ideal_chunk_size, max_chunk_size)
-
-    return int(chunk_size)
-
-
 def compute_chunk_distribution(
     self, data, R, k, min_chunk_size=MIN_CHUNK_SIZE, max_chunk_size=MAX_CHUNK_SIZE
 ):
@@ -680,85 +602,35 @@ def adjust_uids_to_multiple(available_uids, R):
     return available_uids[:adjusted_length]
 
 
-def compute_chunk_distribution_mut_exclusive(self, data, R, k):
+async def compute_chunk_distribution_mut_exclusive_numpy_reuse_uids_yield(
+    self, data, R, k
+):
     """
-    Computes and yields the distribution of data chunks across unique sets of UIDs, ensuring mutual exclusivity of UIDs across all chunks.
+    Asynchronously computes and yields chunk distributions for given data, considering the redundancy
+    factor and the number of query miners. This function splits the data into chunks, assigns a group
+    of miners to each chunk, and handles redundancy by reusing UIDs when necessary.
 
-    Args:
-        data (bytes): The data to be distributed across the network.
-        R (int): The redundancy factor, indicating the number of unique UIDs per chunk.
-        k (int): The total number of UIDs available for distribution.
+    Parameters:
+        data (bytes): The data to be distributed in chunks across the network.
+        R (int): Redundancy factor indicating the number of times each chunk should be replicated.
+        k (int): The number of unique identifiers (UIDs) or miners to be involved in the distribution.
 
     Yields:
-        dict: A dictionary mapping each chunk's hash to its data and an assigned unique set of UIDs.
+        dict: A dictionary for each chunk containing its hash, the chunk data itself, and the UIDs of
+              the miners assigned to it.
 
     Raises:
-        ValueError: If the redundancy factor R is greater than the number of available UIDs, or if the available UIDs are not a multiple of R.
+        ValueError: If the redundancy factor R is greater than the number of available UIDs.
+
+    Note:
+        - This function is essential for distributed storage systems where data needs to be stored
+          redundantly across multiple nodes.
+        - It ensures that each data chunk is stored by R different miners for redundancy.
+        - The distribution of chunks takes into account the availability of miners and may reuse UIDs
+          to meet the required redundancy factor.
+        - The yielded chunks can be used to parallelize storage operations across the network.
     """
-    available_uids = get_random_uids(self, k=k)
-
-    data_size = len(data)
-    chunk_size = optimal_chunk_size(data_size, len(available_uids), R)
-
-    available_uids = adjust_uids_to_multiple(available_uids, R)
-
-    if R > len(available_uids):
-        raise ValueError(
-            "Redundancy factor cannot be greater than the number of available UIDs."
-        )
-
-    # Partition UIDs into exclusive groups
-    uid_groups = partition_uids(available_uids, R)
-
-    data_chunks = chunk_data_generator(data, chunk_size)
-
-    for chunk, uid_group in zip(data_chunks, uid_groups):
-        chunk_hash = hash_data(chunk)
-        yield {chunk_hash: {"chunk": chunk, "uids": uid_group}}
-
-
-def compute_chunk_distribution_mut_exclusive_numpy(self, data, R, k):
-    """
-    Similar to compute_chunk_distribution_mut_exclusive, but utilizes NumPy arrays for potentially more efficient handling of large lists of UIDs.
-
-    Args:
-        data (bytes): The data to be distributed across the network.
-        R (int): The redundancy factor, indicating the number of unique UIDs per chunk.
-        k (int): The total number of UIDs available for distribution.
-
-    Yields:
-        dict: A dictionary mapping each chunk's hash to its data and an assigned unique set of UIDs.
-
-    Raises:
-        ValueError: If the redundancy factor R is greater than the number of available UIDs, or if the available UIDs are not a multiple of R.
-    """
-    available_uids = get_random_uids(self, k=k)
-
-    data_size = len(data)
-    chunk_size = optimal_chunk_size(data_size, len(available_uids), R)
-
-    available_uids = adjust_uids_to_multiple(available_uids, R)
-
-    if R > len(available_uids):
-        raise ValueError(
-            "Redundancy factor cannot be greater than the number of available UIDs."
-        )
-
-    # Partition UIDs into exclusive groups
-    uid_groups = partition_uids(available_uids, R)
-
-    # Convert uid_groups to a more efficient numpy array if beneficial
-    uid_groups = np.array(uid_groups)
-
-    data_chunks = chunk_data_generator(data, chunk_size)
-
-    for chunk, uid_group in zip(data_chunks, uid_groups):
-        chunk_hash = hash_data(chunk)
-        yield {"chunk_hash": chunk_hash, "chunk": chunk, "uids": uid_group.tolist()}
-
-
-def compute_chunk_distribution_mut_exclusive_numpy_reuse_uids(self, data, R, k):
-    available_uids = get_random_uids(self, k=k)
+    available_uids = await get_available_query_miners(self, k=k)
     data_size = len(data)
     chunk_size = optimal_chunk_size(data_size, len(available_uids), R)
     available_uids = adjust_uids_to_multiple(available_uids, R)
@@ -780,20 +652,92 @@ def compute_chunk_distribution_mut_exclusive_numpy_reuse_uids(self, data, R, k):
                 break
             uid_groups.append(group)
 
-    # Convert uid_groups to a numpy array
-    uid_groups = np.array(uid_groups)
-
     data_chunks = chunk_data_generator(data, chunk_size)
     for chunk, uid_group in zip(data_chunks, uid_groups):
         chunk_hash = hash_data(chunk)
         yield {"chunk_hash": chunk_hash, "chunk": chunk, "uids": uid_group.tolist()}
 
 
-def compute_chunk_distribution_mut_exclusive_numpy_reuse_uids2(self, data_size, R, k):
-    available_uids = get_random_uids(self, k=k)
-    chunk_size = optimal_chunk_size(data_size, len(available_uids), R)
+def calculate_chunk_indices(data_size, chunk_size):
+    """
+    Calculate the start and end indices for each chunk.
+
+    :param data_size: The total size of the data to be chunked.
+    :param chunk_size: The chunk size.
+    :return: A list of tuples, each tuple containing the start and end index of a chunk.
+    """
+    indices = []
+    num_chunks = math.ceil(data_size / chunk_size)
+
+    for i in range(num_chunks):
+        start_idx = i * chunk_size
+        end_idx = min(start_idx + chunk_size, data_size)
+        indices.append((start_idx, end_idx))
+
+        # Adjust the end index for the last chunk if necessary
+        if i == num_chunks - 1 and end_idx < data_size:
+            indices[-1] = (start_idx, data_size)
+
+    return indices
+
+
+def calculate_chunk_indices_from_num_chunks(data_size, num_chunks):
+    """
+    Calculate the start and end indices for each chunk.
+
+    :param data_size: The total size of the data to be chunked.
+    :param num_chunks: The desired number of chunks.
+    :return: A list of tuples, each tuple containing the start and end index of a chunk.
+    """
+    chunk_size = max(1, data_size // num_chunks)  # Determine the size of each chunk
+    indices = []
+
+    for i in range(num_chunks):
+        start_idx = i * chunk_size
+        end_idx = min(start_idx + chunk_size, data_size)
+        indices.append((start_idx, end_idx))
+
+        # Adjust the end index for the last chunk if necessary
+        if i == num_chunks - 1 and end_idx < data_size:
+            indices[-1] = (start_idx, data_size)
+
+    return indices
+
+
+async def compute_chunk_distribution_mut_exclusive_numpy_reuse_uids(
+    self, data_size, R, k, chunk_size=None
+):
+    """
+    Asynchronously computes a distribution of data chunks across a set of unique identifiers (UIDs),
+    taking into account redundancy and chunk size optimization. This function is useful for distributing
+    data across a network of nodes or miners in a way that ensures redundancy and optimal utilization.
+
+    Parameters:
+        self: Reference to the class instance from which this method is called.
+        data_size (int): The total size of the data to be distributed, in bytes.
+        R (int): Redundancy factor, denoting the number of times each chunk should be replicated.
+        k (int): The number of unique identifiers (UIDs) to be involved in the distribution.
+        chunk_size (int, optional): The size of each data chunk. If not provided, an optimal chunk size
+                                    is calculated based on the data size and the number of UIDs.
+
+    Yields:
+        dict: A dictionary representing a chunk's metadata, including its size, start index, end index,
+              the UIDs assigned to it, and its index in the chunk sequence.
+
+    Raises:
+        ValueError: If the redundancy factor R is greater than the number of available UIDs.
+
+    Note:
+        - This function is designed to be used in distributed storage or processing systems where
+          data needs to be split and stored across multiple nodes with redundancy.
+        - It evenly divides the data into chunks and assigns UIDs to each chunk while ensuring that
+          the redundancy requirements are met.
+    """
+
+    available_uids = await get_available_query_miners(self, k=k)
+    chunk_size = chunk_size or optimal_chunk_size(data_size, len(available_uids), R)
     available_uids = adjust_uids_to_multiple(available_uids, R)
-    chunk_sizes = [chunk_size] * (data_size - 1) + [data_size % chunk_size]
+    chunk_indices = calculate_chunk_indices(data_size, chunk_size)
 
     if R > len(available_uids):
         raise ValueError(
@@ -812,12 +756,13 @@ def compute_chunk_distribution_mut_exclusive_numpy_reuse_uids2(self, data_size, 
                 break
             uid_groups.append(group)
 
-    for i, (chunk_size, uid_group) in enumerate(zip(chunk_sizes, uid_groups)):
+    for i, ((start, end), uid_group) in enumerate(zip(chunk_indices, uid_groups)):
         yield {
             "chunk_size": chunk_size,
-            "start_idx": i * chunk_size,
-            "end_idx": (i + 1) * chunk_size,
+            "start_idx": start,
+            "end_idx": end,
             "uids": uid_group,
+            "chunk_index": i,
         }
 
 

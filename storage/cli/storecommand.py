@@ -1,3 +1,21 @@
+# The MIT License (MIT)
+# Copyright © 2023 Yuma Rao
+# Copyright © 2023 philanthrope
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+# documentation files (the “Software”), to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
+# and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+# The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+# the Software.
+
+# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+# THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
 import os
 import sys
 import json
@@ -21,10 +39,7 @@ from rich.prompt import Prompt
 from tqdm import tqdm
 from storage.validator.utils import get_all_validators
 
-
 from .default_values import defaults
-
-bittensor.trace()
 
 # Create a console instance for CLI display.
 console = bittensor.__console__
@@ -116,8 +131,9 @@ class StoreData:
         bittensor.logging.debug("wallet:", wallet)
 
         # Unlock the wallet
-        wallet.hotkey
-        wallet.coldkey
+        if not cli.config.noencrypt:
+            wallet.hotkey
+            wallet.coldkey
 
         cli.config.filepath = os.path.expanduser(cli.config.filepath)
         if not os.path.exists(cli.config.filepath):
@@ -129,23 +145,23 @@ class StoreData:
         with open(cli.config.filepath, "rb") as f:
             raw_data = f.read()
 
-        encrypted_data, encryption_payload = encrypt_data(
-            bytes(raw_data, "utf-8") if isinstance(raw_data, str) else raw_data,
-            wallet,
-        )
-        bittensor.logging.trace(f"CLI encrypted_data : {encrypted_data[:200]}")
+        if not cli.config.noencrypt:
+            encrypted_data, encryption_payload = encrypt_data(
+                bytes(raw_data, "utf-8") if isinstance(raw_data, str) else raw_data,
+                wallet,
+            )
+        else:
+            encrypted_data = raw_data
+            encryption_payload = "{}"
+        decoded_data = base64.b64encode(encrypted_data)
+        bittensor.logging.trace(f"CLI encrypted_data : {encrypted_data[:100]}")
         bittensor.logging.trace(f"CLI encryption_pay : {encryption_payload}")
-        bittensor.logging.trace(
-            f"CLI B64ENCODED DATA: {base64.b64encode(encrypted_data)}"
-        )
-        bittensor.logging.trace(
-            f"CLI hash(encrypted_data): {hash_data(encrypted_data)})"
-        )
+        bittensor.logging.trace(f"CLI B64ENCODED DATA: {decoded_data[:100]}")
         synapse = storage.protocol.StoreUser(
-            encrypted_data=base64.b64encode(encrypted_data),
+            encrypted_data=decoded_data,
             encryption_payload=encryption_payload,
         )
-        bittensor.logging.debug(f"sending synapse: {synapse}")
+        bittensor.logging.debug(f"sending synapse: {synapse.dendrite.dict()}")
 
         hash_basepath = os.path.expanduser(cli.config.hash_basepath)
         hash_filepath = os.path.join(hash_basepath, wallet.name + ".json")
@@ -170,34 +186,36 @@ class StoreData:
         axons = [mg.axons[uid] for uid in query_uids]
         bittensor.logging.debug("query axons:", axons)
 
-        # Query axons
-        responses = dendrite.query(axons, synapse, deserialize=False)
-        bittensor.logging.debug("axon responses:", responses)
-
-        success = False
-        failure_modes = {"code": [], "message": []}
-        for response in responses:
-            if response.dendrite.status_code != 200:
-                failure_modes["code"].append(response.dendrite.status_code)
-                failure_modes["message"].append(response.dendrite.status_message)
-                continue
-
-            data_hash = (
-                response.data_hash.decode("utf-8")
-                if isinstance(response.data_hash, bytes)
-                else response.data_hash
+        with bittensor.__console__.status(":satellite: Storing data..."):
+            # Query axons
+            responses = dendrite.query(axons, synapse, timeout=270, deserialize=False)
+            bittensor.logging.debug(
+                "axon responses:", [resp.dendrite.dict() for resp in responses]
             )
-            bittensor.logging.debug("recieved data hash: {}".format(data_hash))
-            success = True
-            break
+
+            success = False
+            failure_modes = {"code": [], "message": []}
+            for response in responses:
+                if response.dendrite.status_code != 200:
+                    failure_modes["code"].append(response.dendrite.status_code)
+                    failure_modes["message"].append(response.dendrite.status_message)
+                    continue
+
+                data_hash = (
+                    response.data_hash.decode("utf-8")
+                    if isinstance(response.data_hash, bytes)
+                    else response.data_hash
+                )
+                bittensor.logging.debug("recieved data hash: {}".format(data_hash))
+                success = True
+                break
 
         if success:
             # Save hash mapping after successful storage
-            save_hash_mapping(
-                hash_filepath, filename=cli.config.filepath, data_hash=data_hash
-            )
+            filename = os.path.basename(cli.config.filepath)
+            save_hash_mapping(hash_filepath, filename=filename, data_hash=data_hash)
             bittensor.logging.info(
-                f"Stored {cli.config.filepath} on the Bittensor network with hash {data_hash}"
+                f"Stored {filename} on the Bittensor network with hash {data_hash}"
             )
         else:
             bittensor.logging.error(f"Failed to store data at {cli.config.filepath}.")
@@ -272,6 +290,11 @@ class StoreData:
             type=int,
             default=4096,
             help="Tao limit for the validator permit.",
+        )
+        store_parser.add_argument(
+            "--noencrypt",
+            action="store_true",
+            help="Do not encrypt the data before storing it on the Bittensor network.",
         )
 
         bittensor.wallet.add_args(store_parser)

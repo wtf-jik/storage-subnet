@@ -1,3 +1,21 @@
+# The MIT License (MIT)
+# Copyright © 2023 Yuma Rao
+# Copyright © 2023 philanthrope
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+# documentation files (the “Software”), to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
+# and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+# The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+# the Software.
+
+# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+# THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
 import os
 import sys
 import json
@@ -143,30 +161,44 @@ class RetrieveData:
         axons = [mg.axons[uid] for uid in query_uids]
         bittensor.logging.debug("query axons:", axons)
 
-        # Query axons
-        responses = dendrite.query(axons, synapse, deserialize=False)
-        bittensor.logging.debug("axon responses:", responses)
+        with bittensor.__console__.status(":satellite: Retreiving data..."):
+            # Query axons
+            responses = dendrite.query(axons, synapse, timeout=270, deserialize=False)
+            success = False
+            for response in responses:
+                bittensor.logging.trace(f"response: {response.dendrite.dict()}")
+                if (
+                    response.dendrite.status_code != 200
+                    or response.encrypted_data == None
+                ):
+                    continue
 
-        success = False
-        for response in responses:
-            bittensor.logging.trace(f"response: {response}")
-            if response.dendrite.status_code != 200 or response.encrypted_data == None:
-                continue
-
-            # Decrypt the response
-            bittensor.logging.trace(f"encrypted_data: {response.encrypted_data}")
-            encrypted_data = base64.b64decode(response.encrypted_data)
-            bittensor.logging.debug(
-                f"encryption_payload: {response.encryption_payload}"
-            )
-            decrypted_data = decrypt_data_with_private_key(
-                encrypted_data,
-                response.encryption_payload,
-                bytes(wallet.coldkey.private_key.hex(), "utf-8"),
-            )
-            bittensor.logging.trace(f"decrypted_data: {decrypted_data}")
-            bittensor.logging.debug(decrypted_data)
-            success = True
+                # Decrypt the response
+                bittensor.logging.trace(
+                    f"encrypted_data: {response.encrypted_data[:100]}"
+                )
+                encrypted_data = base64.b64decode(response.encrypted_data)
+                bittensor.logging.debug(
+                    f"encryption_payload: {response.encryption_payload}"
+                )
+                if (
+                    response.encryption_payload == None
+                    or response.encryption_payload == ""
+                    or response.encryption_payload == "{}"
+                ):
+                    bittensor.logging.warning(
+                        "No encryption payload found. Unencrypted data."
+                    )
+                    decrypted_data = encrypted_data
+                else:
+                    decrypted_data = decrypt_data_with_private_key(
+                        encrypted_data,
+                        response.encryption_payload,
+                        bytes(wallet.coldkey.private_key.hex(), "utf-8"),
+                    )
+                bittensor.logging.trace(f"decrypted_data: {decrypted_data[:100]}")
+                success = True
+                break  # No need to keep going if we returned data.
 
         if success:
             # Save the data

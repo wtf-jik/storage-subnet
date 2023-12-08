@@ -1,9 +1,26 @@
+# The MIT License (MIT)
+# Copyright © 2023 Yuma Rao
+# Copyright © 2023 philanthrope
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+# documentation files (the “Software”), to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
+# and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+# The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+# the Software.
+
+# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+# THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+# DEALINGS IN THE SOFTWARE.
+
 import os
 import sys
 import copy
 import json
 import time
-import redis
 import torch
 import base64
 import typing
@@ -11,6 +28,7 @@ import asyncio
 import aioredis
 import argparse
 import traceback
+import websocket
 import bittensor as bt
 
 from typing import List, Optional, Tuple, Dict, Any
@@ -18,100 +36,31 @@ from loguru import logger
 from pprint import pformat
 from functools import partial
 from traceback import print_exception
-from random import choice as random_choice
-from Crypto.Random import get_random_bytes, random
+from Crypto.Random import get_random_bytes
 from pyinstrument import Profiler
 
-from dataclasses import asdict
-from storage.validator.event import EventSchema
-
 from storage import protocol
-
-from storage.shared.ecc import (
-    hash_data,
-    setup_CRS,
-    ECCommitment,
-    ecc_point_to_hex,
-    hex_to_ecc_point,
-)
-
-from storage.shared.merkle import (
-    MerkleTree,
-)
-
-from storage.shared.utils import (
-    b64_encode,
-    b64_decode,
-    chunk_data,
-    safe_key_search,
-)
-
+from storage.shared.ecc import hash_data
 from storage.validator.utils import (
-    make_random_file,
-    get_random_chunksize,
-    check_uid_availability,
-    get_random_uids,
-    get_query_miners,
-    get_query_validators,
     get_available_query_miners,
-    get_current_validtor_uid_round_robin,
     compute_chunk_distribution_mut_exclusive_numpy_reuse_uids,
 )
-
-from storage.validator.encryption import (
-    decrypt_data,
-    encrypt_data,
-)
-
 from storage.validator.verify import (
     verify_store_with_seed,
-    verify_challenge_with_seed,
     verify_retrieve_with_seed,
 )
-
 from storage.validator.config import config, check_config, add_args
-
-from storage.validator.state import (
-    should_checkpoint,
-    checkpoint,
-    should_reinit_wandb,
-    reinit_wandb,
-    load_state,
-    save_state,
-    init_wandb,
-    ttl_get_block,
-    log_event,
-)
-
+from storage.validator.state import ttl_get_block
 from storage.validator.reward import apply_reward_scores
-
-from storage.validator.weights import (
-    should_set_weights,
-    set_weights,
-)
-
 from storage.validator.database import (
     add_metadata_to_hotkey,
-    get_miner_statistics,
-    get_metadata_for_hotkey,
-    total_network_storage,
     store_chunk_metadata,
     store_file_chunk_mapping_ordered,
-    get_metadata_for_hotkey_and_hash,
-    update_metadata_for_data_hash,
-    get_all_chunk_hashes,
     get_ordered_metadata,
     hotkey_at_capacity,
-    get_miner_statistics,
     retrieve_encryption_payload,
 )
-
-from storage.validator.bonding import (
-    miner_is_registered,
-    update_statistics,
-    get_tier_factor,
-    compute_all_tiers,
-)
+from storage.validator.bonding import update_statistics
 
 
 class neuron:
@@ -190,7 +139,7 @@ class neuron:
         self.database = aioredis.StrictRedis(
             host=self.config.database.host,
             port=self.config.database.port,
-            db=6,  # self.config.database.index,
+            db=self.config.database.index,
         )
         self.db_semaphore = asyncio.Semaphore()
 
@@ -244,11 +193,6 @@ class neuron:
         # Init the event loop.
         self.loop = asyncio.get_event_loop()
 
-        # Init wandb.
-        if not self.config.wandb.off:
-            bt.logging.debug("loading wandb")
-            init_wandb(self)
-
         if self.config.neuron.epoch_length_override:
             self.config.neuron.epoch_length = self.config.neuron.epoch_length_override
         else:
@@ -269,13 +213,71 @@ class neuron:
 
         self.step = 0
 
+        self._top_n_validators = None
+        self.get_top_n_validators()
+
     # TODO: Develop the agreement gossip protocol across validators to accept storage requests
     # and accept retrieve requests given agreement of top n % stake
     async def agreement_protocol(self):
         raise NotImplementedError
 
+    def get_top_n_validators(self):
+        """
+        Retrieves a list of the top N validators based on the stake value from the metagraph.
+        This list represents the top 10% of validators by stake.
+
+        Returns:
+            list: A list of UIDs (unique identifiers) for the top N validators.
+
+        Note:
+            - The method filters out the UID of the current instance (self) if it is in the top N list.
+            - This function is typically used to identify validators with the highest stake in the network,
+            which can be crucial for decision-making processes in a distributed system.
+        """
+        top_uids = torch.where(
+            self.metagraph.S > torch.quantile(self.metagraph.S, 1 - 0.1)
+        )[0].tolist()
+        if self.my_subnet_uid in top_uids:
+            top_uids.remove(self.my_subnet_uid)
+        return top_uids
+
+    @property
+    def top_n_validators(self):
+        """
+        A property that provides access to the top N validators' UIDs. It calculates the top N validators
+        if they have not been computed yet or if a checkpoint condition is met (indicated by the
+        'should_checkpoint' function).
+
+        Returns:
+            list: A list of UIDs for the top N validators.
+
+        Note:
+            - This property employs lazy loading and caching to efficiently manage the retrieval of top N validators.
+            - The cache is updated based on specific conditions, such as crossing a checkpoint in the network.
+        """
+        if self._top_n_validators == None or should_checkpoint(self):
+            self._top_n_validators = self.get_top_n_validators()
+        return self._top_n_validators
+
     async def store_user_data(self, synapse: protocol.StoreUser) -> protocol.StoreUser:
-        bt.logging.debug(f"store_user_data() {synapse.dict()}")
+        """
+        Asynchronously handles the storage of user data by processing a store user request. It stores the
+        encrypted user data on the network and updates the request with the resulting data hash.
+
+        Parameters:
+            synapse (protocol.StoreUser): An instance of the StoreUser protocol class containing information
+                                        about the data to be stored.
+
+        Returns:
+            protocol.StoreUser: The updated instance of the StoreUser protocol class with the data hash
+                                of the stored data.
+
+        Note:
+            - This method is part of a larger protocol for storing data in a distributed network.
+            - It relies on the 'store_broadband' method for actual storage and hash generation.
+            - The method logs detailed information about the storage process for monitoring and debugging.
+        """
+        bt.logging.debug(f"store_user_data() {synapse.dendrite.dict()}")
         data_hash = await self.store_broadband(
             encrypted_data=synapse.encrypted_data,
             encryption_payload=synapse.encryption_payload,
@@ -284,63 +286,200 @@ class neuron:
         return synapse
 
     async def store_blacklist(self, synapse: protocol.StoreUser) -> Tuple[bool, str]:
-        return False, "NotImplemented. Whitelisting all.."
+        # If explicitly whitelisted hotkey, allow.
+        if synapse.dendrite.hotkey in self.config.api.whitelisted_hotkeys:
+            return False, f"Hotkey {synapse.dendrite.hotkey} whitelisted."
+        # If a validator with top n% stake, allow.
+        if synapse.dendrite.hotkey in self.top_n_validators:
+            return False, f"Hotkey {synapse.dendrite.hotkey} in top n% stake."
+        # Otherwise, reject.
+        return (
+            True,
+            f"Hotkey {synapse.dendrite.hotkey} not whitelisted or in top n% stake.",
+        )
 
     async def store_priority(self, synapse: protocol.StoreUser) -> float:
-        return 0.0
+        caller_uid = self.metagraph.hotkeys.index(
+            synapse.dendrite.hotkey
+        )  # Get the caller index.
+        priority = float(
+            self.metagraph.S[caller_uid]
+        )  # Return the stake as the priority.
+        bt.logging.trace(
+            f"Prioritizing {synapse.dendrite.hotkey} with value: ", priority
+        )
+        return priority
 
     async def retrieve_user_data(
         self, synapse: protocol.RetrieveUser
     ) -> protocol.RetrieveUser:
+        """
+        Asynchronously handles the retrieval of user data from the network based on a given hash.
+        It retrieves and verifies the data, then updates the synapse object with the retrieved data.
+
+        Parameters:
+            synapse (protocol.RetrieveUser): An instance of the RetrieveUser protocol class containing
+                                            the hash of the data to be retrieved.
+
+        Returns:
+            protocol.RetrieveUser: The updated instance of the RetrieveUser protocol class with the
+                                retrieved encrypted data and encryption payload.
+
+        Note:
+            - The function is part of a larger protocol for data retrieval in a distributed network.
+            - It utilizes the 'retrieve_broadband' method to perform the actual data retrieval and
+            verification based on the provided data hash.
+            - The method logs the retrieval process and the resulting data for monitoring and debugging.
+        """
         data, payload = await self.retrieve_broadband(synapse.data_hash)
-        bt.logging.debug(f"returning user data: {data}")
+        bt.logging.debug(f"returning user data: {data[:100]}")
         bt.logging.debug(f"returning user payload: {payload}")
         synapse.encrypted_data = data
         synapse.encryption_payload = (
             json.dumps(payload) if isinstance(payload, dict) else payload
         )
         return synapse
-        # TODO: determine at what level we will use encryption
-        # Will we decrypt here or just pass encrypted data + payload back to user for them to decrypt?
-        # Are we going to use bittensor wallet encryptin for everything? E.g. create user accounts WITH
-        # bittensor wallets, even if they're not on the blockchain or have TAO. Just to keep the scheme
-        # consistent and easy to develop with. (no other encryption schemes except to login to frontend)
 
     async def retrieve_blacklist(
         self, synapse: protocol.RetrieveUser
     ) -> Tuple[bool, str]:
-        return False, "NotImplemented. Whitelisting all..."
+        # If explicitly whitelisted hotkey, allow.
+        if synapse.dendrite.hotkey in self.config.api.whitelisted_hotkeys:
+            return False, f"Hotkey {synapse.dendrite.hotkey} whitelisted."
+        # If a validator with top n% stake, allow.
+        if synapse.dendrite.hotkey in self.top_n_validators:
+            return False, f"Hotkey {synapse.dendrite.hotkey} in top n% stake."
+        # Otherwise, reject.
+        return (
+            True,
+            f"Hotkey {synapse.dendrite.hotkey} not whitelisted or in top n% stake.",
+        )
 
     async def retrieve_priority(self, synapse: protocol.RetrieveUser) -> float:
-        return 0.0
+        caller_uid = self.metagraph.hotkeys.index(
+            synapse.dendrite.hotkey
+        )  # Get the caller index.
+        priority = float(
+            self.metagraph.S[caller_uid]
+        )  # Return the stake as the priority.
+        bt.logging.trace(
+            f"Prioritizing {synapse.dendrite.hotkey} with value: ", priority
+        )
+        return priority
+
+    async def ping_uids(self, uids):
+        """
+        Ping a list of UIDs to check their availability.
+        Returns a tuple with a list of successful UIDs and a list of failed UIDs.
+        """
+        axons = [self.metagraph.axons[uid] for uid in uids]
+        responses = await self.dendrite(
+            axons,
+            bt.Synapse(),
+            deserialize=False,
+            timeout=self.config.api.ping_timeout,
+        )
+        successful_uids = [
+            uid
+            for uid, response in zip(uids, responses)
+            if response.dendrite.status_code == 200
+        ]
+        failed_uids = [
+            uid
+            for uid, response in zip(uids, responses)
+            if response.dendrite.status_code != 200
+        ]
+        bt.logging.trace("successful uids:", successful_uids)
+        bt.logging.trace("failed uids    :", failed_uids)
+        return successful_uids, failed_uids
+
+    # TODO: This is still giving us UIDs that are going to timeout. What the fuck?
+    async def compute_and_ping_chunks(self, distributions):
+        """
+        Asynchronously evaluates the availability of miners for the given chunk distributions by pinging them.
+        If certain miners are not available, the function rerolls the distribution, selecting new miners as replacements.
+
+        Parameters:
+            distributions (list of dicts): A list of chunk distribution dictionaries, each containing
+                                        information about chunk indices and assigned miner UIDs.
+
+        Returns:
+            list of dicts: The updated list of chunk distributions with possibly changed miner UIDs based on availability.
+
+        Note:
+            - This function is crucial for ensuring that data chunks are assigned to available and responsive miners.
+            - Pings miners based on their UIDs and updates the distributions accordingly.
+            - Logs the new set of UIDs and distributions for traceability.
+        """
+        for dist in distributions:
+            uids = dist["uids"]
+            successful_uids, failed_uids = await self.ping_uids(uids)
+            if len(successful_uids) < len(uids):
+                # Reroll for specific UIDs that did not succeed
+                new_uids = await get_available_query_miners(
+                    self, k=len(uids), exclude=failed_uids
+                )
+                bt.logging.trace("new uids:", new_uids)
+                # Update the distribution with new UIDs
+                dist["uids"] = tuple(new_uids)  # Assuming new_uids is a list of UIDs
+
+        # Continue with your logic using the updated distributions
+        bt.logging.trace("new distributions:", distributions)
+        return distributions
+
+    async def reroll_distribution(self, distribution, failed_uids):
+        """
+        Asynchronously rerolls a single data chunk distribution by replacing failed miner UIDs with new, available ones.
+        This is part of the error handling process in data distribution to ensure that each chunk is reliably stored.
+
+        Parameters:
+            distribution (dict): The original chunk distribution dictionary, containing chunk information and miner UIDs.
+            failed_uids (list of int): List of UIDs that failed in the original distribution and need replacement.
+
+        Returns:
+            dict: The updated chunk distribution with new miner UIDs replacing the failed ones.
+
+        Note:
+            - This function is typically used when certain miners are unresponsive or unable to store the chunk.
+            - Ensures that each chunk has the required number of active miners for redundancy.
+        """
+        # Get new UIDs to replace the failed ones
+        new_uids = await get_available_query_miners(
+            self, k=len(failed_uids), exclude=failed_uids
+        )
+        distribution["uids"] = new_uids
+        return distribution
 
     async def store_broadband(self, encrypted_data, encryption_payload, R=3, k=10):
         """
-        Stores data on the network and ensures it is correctly committed by the miners.
+        Asynchronously stores encrypted data across a distributed network by splitting it into chunks and
+        assigning these chunks to various miners for storage. This method ensures redundancy and efficient
+        data distribution while handling network requests concurrently.
 
-        Uses a semaphore to restrict the number of concurrent requests to the network.
-
-        Stores chunks in groups of R, and queries k miners for each chunk.
-
-        Basic algorthim:
-            - Split data into chunks
-            - Compute chunk distribution
-            - For each chunk:
-                - Select R miners to store the chunk
-            - Verify the response from each miner
-            - Store the data for each verified response
+        The process includes chunking the data, selecting miners for storage, and verifying the integrity
+        of stored data through response validation.
 
         Parameters:
-            data: bytes
-                The data to be stored.
-            R: int
-                The redundancy factor for the data storage.
-            k: int
-                The target number of miners to query for each chunk.
+            encrypted_data (bytes): The encrypted data to be stored across the network.
+            encryption_payload (dict): Additional payload information required for encryption.
+            R (int, optional): The redundancy factor, denoting how many times each chunk is replicated. Default is 3.
+            k (int, optional): The number of miners to query for each chunk. Default is 10.
+
+        Returns:
+            str: The hash of the full data, representing its unique identifier in the network.
+
+        Raises:
+            Exception: If the process of creating initial distributions fails after multiple retries.
+
+        Note:
+            - Uses a semaphore to limit the number of concurrent network requests.
+            - Employs a retry mechanism for handling network and miner availability issues.
+            - Logs various stages of the process for debugging and monitoring purposes.
         """
-        # Create a profiler instance
-        profiler = Profiler()
-        profiler.start()
+        if self.config.neuron.profile:
+            # Create a profiler instance
+            profiler = Profiler()
+            profiler.start()
 
         semaphore = asyncio.Semaphore(self.config.neuron.semaphore_size)
 
@@ -348,11 +487,11 @@ class neuron:
             g, h = setup_CRS(curve=self.config.neuron.curve)
 
             bt.logging.debug(f"type(chunk): {type(chunk)}")
-            bt.logging.debug(f"chunk: {chunk}")
+            bt.logging.debug(f"chunk: {chunk[:100]}")
             chunk = chunk.encode("utf-8") if isinstance(chunk, str) else chunk
             b64_encoded_chunk = await asyncio.to_thread(base64.b64encode, chunk)
             b64_encoded_chunk = b64_encoded_chunk.decode("utf-8")
-            bt.logging.debug(f"b64_encoded_chunk: {b64_encoded_chunk}")
+            bt.logging.debug(f"b64_encoded_chunk: {b64_encoded_chunk[:100]}")
 
             synapse = protocol.Store(
                 encrypted_data=b64_encoded_chunk,
@@ -361,10 +500,7 @@ class neuron:
                 h=ecc_point_to_hex(h),
                 seed=get_random_bytes(32).hex(),
             )
-            bt.logging.debug(f"synapse created...")
 
-            # TODO: do this more elegantly, possibly reroll with fresh miner
-            # uids to get back to redundancy factor R before querying
             uids = [
                 uid
                 for uid in uids
@@ -376,10 +512,10 @@ class neuron:
                 axons,
                 synapse,
                 deserialize=False,
-                timeout=30,
+                timeout=self.config.api.store_timeout,
             )
 
-            chunk_size = sys.getsizeof(chunk)
+            chunk_size = sys.getsizeof(chunk)  # chunk size in bytes
             bt.logging.debug(f"chunk size: {chunk_size}")
 
             start = time.time()
@@ -387,7 +523,7 @@ class neuron:
                 full_hash,
                 chunk_hash,
                 [self.hotkeys[uid] for uid in uids],
-                chunk_size,
+                chunk_size,  # this should be len(chunk) but we need to fix the chunking
                 self.database,
             )
             end = time.time()
@@ -437,89 +573,177 @@ class neuron:
                 f"handle_uid_operations time for uid {uid} : {time.time()-ss}"
             )
 
-        bt.logging.debug(f"store_broadband() {encrypted_data}")
+            return {"chunk_hash": chunk_hash, "uid": uid, "verified": verified}
 
-        tasks = []
-        chunks = []
-        uids_nested = []
-        chunk_hashes = []
+        async def semaphore_query_miners(distributions):
+            tasks = []
+            async with semaphore:
+                for i, dist in enumerate(distributions):
+                    bt.logging.trace(
+                        f"Start index: {dist['start_idx']}, End index: {dist['end_idx']}"
+                    )
+                    chunk = encrypted_data[dist["start_idx"] : dist["end_idx"]]
+                    bt.logging.trace(f"chunk: {chunk[:100]}")
+                    dist["chunk_hash"] = hash_data(chunk)
+                    bt.logging.debug(
+                        f"Chunk {i} | uid distribution: {dist['uids']} | size: {dist['chunk_size']}"
+                    )
+
+                    # Create an asyncio task for each chunk processing
+                    task = asyncio.create_task(
+                        store_chunk_group(dist["chunk_hash"], chunk, dist["uids"])
+                    )
+                    tasks.append(task)
+
+            bt.logging.debug(f"gathering broadband tasks: {pformat(tasks)}")
+            responses_nested = await asyncio.gather(*tasks)
+
+            # Update the distributions with respones
+            for i, responses in enumerate(responses_nested):
+                distributions[i]["responses"] = responses
+            return distributions
+
+        async def semaphore_query_uid_operations(distributions):
+            tasks = []
+            for dist in distributions:
+                chunk_hash = dist["chunk_hash"]
+                chunk_size = dist["chunk_size"]
+                for uid, response in zip(dist["uids"], dist["responses"]):
+                    task = asyncio.create_task(
+                        handle_uid_operations(uid, response, chunk_hash, chunk_size)
+                    )
+                    tasks.append(task)
+            uid_verified_dict_list = await asyncio.gather(*tasks)
+            return uid_verified_dict_list
+
+        async def create_initial_distributions(encrypted_data, R, k):
+            dist_gen = compute_chunk_distribution_mut_exclusive_numpy_reuse_uids(
+                self,
+                sys.getsizeof(encrypted_data),
+                R,
+                k,
+            )
+            # Ping first to see if we need to reroll instead of waiting for the timeout
+            distributions = [dist async for dist in dist_gen]
+            distributions = await self.compute_and_ping_chunks(distributions)
+            return distributions
+
+        bt.logging.debug(f"store_broadband() {encrypted_data[:100]}")
+
         full_hash = hash_data(encrypted_data)
         bt.logging.debug(f"full hash: {full_hash}")
+
+        # Check and see if hash already exists, reject if so.
+        if await get_ordered_metadata(full_hash, self.database):
+            bt.logging.warning(f"Hash {full_hash} already exists on the network.")
+            return full_hash
+
         full_size = sys.getsizeof(encrypted_data)
         bt.logging.debug(f"full size: {full_size}")
-        ss = time.time()
 
-        async with semaphore:
-            start = time.time()
-            for i, dist in enumerate(
-                compute_chunk_distribution_mut_exclusive_numpy_reuse_uids(
-                    self, encrypted_data, R, k
+        # Sometimes this can fail, try/catch and retry for starters...
+        # Compute the chunk distribution
+        retries = 0
+        while retries < 3:
+            try:
+                distributions = await create_initial_distributions(encrypted_data, R, k)
+                break
+            except websocket._exceptions.WebSocketConnectionClosedException:
+                bt.logging.warning(
+                    f"Failed to create initial distributions, retrying..."
                 )
-            ):
-                uids_nested.append(dist["uids"])
-                chunk_size = sys.getsizeof(dist["chunk"])
-                bt.logging.debug(f"chunk_size: {chunk_size}")
-                bt.logging.debug(f"Chunk {i} | size: {chunk_size}")
-                start_inner = time.time()
-                bt.logging.debug(f"Chunk {i} | uid distribution: {dist['uids']}")
-                chunks.append(dist["chunk"])
-                chunk_hashes.append(dist["chunk_hash"])
-
-                # Create an asyncio task for each chunk processing
-                task = asyncio.create_task(
-                    store_chunk_group(dist["chunk_hash"], dist["chunk"], dist["uids"])
+                retries += 1
+            except Exception as e:
+                bt.logging.warning(
+                    f"Failed to create initial distributions: {e}, retrying..."
                 )
-                tasks.append(task)
+                retries += 1
 
-                end_inner = time.time()
-                bt.logging.debug(f"tasks inner time: {end_inner-start_inner}")
+        bt.logging.trace(f"computed distributions: {pformat(distributions)}")
 
-        bt.logging.debug(f"gathering broadband tasks: {pformat(tasks)}")
-        start_tasks = time.time()
-        responses_nested = await asyncio.gather(*tasks)
-        end_tasks = time.time()
-        bt.logging.debug(f"tasks gather time: {end_tasks - start_tasks}")
-
-        tasks = []
-        for i, (uids, responses) in enumerate(zip(uids_nested, responses_nested)):
-            for uid, response in zip(uids, responses):
-                tasks.append(
-                    asyncio.create_task(
-                        handle_uid_operations(
-                            uid, response, chunk_hashes[i], chunk_size
-                        )
+        chunk_hashes = []
+        retry_dists = [None]  # sentinel for first iteration
+        retries = 0
+        while len(distributions) > 0 and retries < 3:
+            async with semaphore:
+                # Store on the network: query miners for each chunk
+                # Updated distributions now contain responses from the network
+                updated_distributions = await semaphore_query_miners(distributions)
+                # Verify the responses and store the metadata for each verified response
+                verifications = await semaphore_query_uid_operations(
+                    updated_distributions
+                )
+                if (
+                    chunk_hashes == []
+                ):  # First time only. Grab all hashes in order after processed.
+                    chunk_hashes.extend(
+                        [dist["chunk_hash"] for dist in updated_distributions]
                     )
-                )
-        asyncio.gather(*tasks)
 
-        ee = time.time()
-        bt.logging.debug(f"Full broadband time: {ee-ss}")
+                # Process verification results and reroll failed distributions in a single loop
+                distributions = (
+                    []
+                )  # reset original distributions to populate for next round
+                for i, dist in enumerate(updated_distributions):
+                    # Get verification status for the current distribution
+                    bt.logging.trace(f"verifications: {pformat(verifications)}")
+
+                    # Check if any UID in the distribution failed verification
+                    if any(not v["verified"] for v in verifications):
+                        # Extract failed UIDs
+                        failed_uids = [
+                            v["uid"] for v in verifications if not v["verified"]
+                        ]
+                        bt.logging.trace(f"failed uids: {pformat(failed_uids)}")
+                        # Reroll distribution with failed UIDs
+                        rerolled_dist = await self.reroll_distribution(
+                            dist, failed_uids
+                        )
+                        bt.logging.trace(
+                            f"rerolled uids: {pformat(rerolled_dist['uids'])}"
+                        )
+                        # Replace the original distribution with the rerolled one
+                        distributions.append(rerolled_dist)
+
+            retries += 1
 
         # Update the chunk hash mapping for this entire file
         await store_file_chunk_mapping_ordered(
             full_hash=full_hash,
             chunk_hashes=chunk_hashes,
-            chunk_indices=list(range(len(chunks))),
+            chunk_indices=list(range(len(chunk_hashes))),
             encryption_payload=encryption_payload,
             database=self.database,
         )
 
-        # Stop the profiler
-        profiler.stop()
-        # Print the results
-        print(profiler.output_text(unicode=True, color=True))
+        if self.config.neuron.profile:
+            # Stop the profiler
+            profiler.stop()
+            # Print the results
+            print(profiler.output_text(unicode=True, color=True))
 
         return full_hash
 
     async def retrieve_broadband(self, full_hash: str):
         """
-        Retrieves and verifies data from the network, ensuring integrity and correctness of the data associated with the given hash.
+        Asynchronously retrieves and verifies data from the network based on a given hash, ensuring
+        the integrity and correctness of the data. This method orchestrates the retrieval process across
+        multiple miners, reconstructs the data from chunks, and verifies its integrity.
 
         Parameters:
-            data_hash (str): The hash of the data to be retrieved.
+            full_hash (str): The hash of the data to be retrieved, representing its unique identifier on the network.
 
         Returns:
-            The retrieved data if the verification is successful.
+            tuple: A tuple containing the reconstructed data and its associated encryption payload.
+
+        Raises:
+            Exception: If no metadata is found for the given hash or if there are issues during the retrieval process.
+
+        Note:
+            - This function is a critical component of data retrieval in a distributed storage system.
+            - It handles concurrent requests to multiple miners and assembles the data chunks based on
+            ordered metadata.
+            - In case of discrepancies in data size, the function logs a warning for potential data integrity issues.
         """
         semaphore = asyncio.Semaphore(self.config.neuron.semaphore_size)
 
@@ -534,7 +758,7 @@ class neuron:
                 axons,
                 synapse,
                 deserialize=False,
-                timeout=60,
+                timeout=self.config.api.retrieve_timeout,
             )
 
             return responses
@@ -548,39 +772,50 @@ class neuron:
         # Get the hotkeys/uids to query
         tasks = []
         total_size = 0
-        bt.logging.debug(f"ordered metadata: {ordered_metadata}")
+        bt.logging.debug(f"ordered metadata: {pformat(ordered_metadata)}")
         # TODO: change this to use retrieve_mutually_exclusive_hotkeys_full_hash
         # to avoid possibly double querying miners for greater retrieval efficiency
-        for chunk_metadata in ordered_metadata:
-            uids = [self.hotkeys.index(hotkey) for hotkey in chunk_metadata["hotkeys"]]
-            total_size += chunk_metadata["size"]
-            tasks.append(
-                asyncio.create_task(
-                    retrieve_chunk_group(chunk_metadata["chunk_hash"], uids)
-                )
-            )
-        responses = await asyncio.gather(*tasks)
 
-        chunks = {}
-        for i, response_group in enumerate(responses):
-            for response in response_group:
-                verified = verify_retrieve_with_seed(response)
-                if verified:
-                    # Add to final chunks dict
-                    if i not in list(chunks.keys()):
-                        chunks[i] = base64.b64decode(response.data)
-                else:
-                    bt.logging.error(
-                        f"Failed to verify store commitment from UID: {uid}"
+        async with semaphore:
+            for chunk_metadata in ordered_metadata:
+                bt.logging.debug(f"chunk metadata: {chunk_metadata}")
+                uids = [
+                    self.hotkeys.index(hotkey) for hotkey in chunk_metadata["hotkeys"]
+                ]
+                total_size += chunk_metadata["size"]
+                tasks.append(
+                    asyncio.create_task(
+                        retrieve_chunk_group(chunk_metadata["chunk_hash"], uids)
                     )
+                )
+            responses = await asyncio.gather(*tasks)
 
+            chunks = {}
+            for i, response_group in enumerate(responses):
+                for response in response_group:
+                    if response.dendrite.status_code != 200:
+                        bt.logging.debug(f"failed response: {response.dendrite.dict()}")
+                        continue
+                    verified = verify_retrieve_with_seed(response)
+                    if verified:
+                        # Add to final chunks dict
+                        if i not in list(chunks.keys()):
+                            bt.logging.debug(
+                                f"Adding chunk {i} to chunks, size: {sys.getsizeof(response.data)}"
+                            )
+                            chunks[i] = base64.b64decode(response.data)
+                            bt.logging.debug(f"chunk {i} | {chunks[i][:100]}")
+                    else:
+                        bt.logging.error(
+                            f"Failed to verify store commitment from UID: {uid}"
+                        )
+
+        bt.logging.trace(f"chunks after: {[chunk[:100] for chunk in chunks.values()]}")
+        bt.logging.trace(
+            f"len(chunks) after: {[len(chunk) for chunk in chunks.values()]}"
+        )
         # Reconstruct the data
         data = b"".join(chunks.values())
-
-        if total_size != sys.getsizeof(data):
-            bt.logging.warning(
-                f"Data reconstruction has different size than metadata: {total_size} != {sys.getsizeof(data)}"
-            )
 
         encryption_payload = await retrieve_encryption_payload(full_hash, self.database)
         bt.logging.debug(f"retrieved encryption_payload: {encryption_payload}")
@@ -619,19 +854,6 @@ class neuron:
                     block=self.prev_step_block,
                 )
                 self.hotkeys = copy.deepcopy(self.metagraph.hotkeys)
-                log = (
-                    f"Step:{self.step} | "
-                    f"Block:{self.metagraph.block.item()} | "
-                    f"Stake:{self.metagraph.S[self.my_subnet_uid]} | "
-                    f"Rank:{self.metagraph.R[self.my_subnet_uid]} | "
-                    f"Trust:{self.metagraph.T[self.my_subnet_uid]} | "
-                    f"Consensus:{self.metagraph.C[self.my_subnet_uid] } | "
-                    f"Incentive:{self.metagraph.I[self.my_subnet_uid]} | "
-                    f"Emission:{self.metagraph.E[self.my_subnet_uid]}"
-                )
-                bt.logging.info(log)
-                if self.config.wandb.on:
-                    wandb.log(log)
 
         # If someone intentionally stops the miner, it'll safely terminate operations.
         except KeyboardInterrupt:
