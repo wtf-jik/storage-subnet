@@ -326,12 +326,7 @@ def add_args(cls, parser):
         nargs="+",
         type=list,
         help="List of whitelisted hotkeys.",
-        default=[
-            "5E4yZGgFSYvMn9gG9U6ciHZgXdPcRxmbX27mbTsz7yRspKiy",
-            "5DJZYpmQvtNfea4Df7LZJRrAFTp5wLXiUkK6aYvwtq6nNSBY",
-            "5CaFuijc2ucdoWhkjLaYgnzYrpv62KGt1fWWtUxhFHXPA3KK",
-            "5C86aJ2uQawR6P6veaJQXNK9HaWh6NMbUhTiLs65kq4ZW3NH",
-        ],
+        default=[],
     )
 
 
