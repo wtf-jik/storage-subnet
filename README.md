@@ -34,7 +34,7 @@ We consider this system to be an important stepping stone so that bittensor can 
    - [Running a Miner](#running-a-miner)
    - [Running a Validator](#running-a-validator)
    - [Running the API](#running-the-api)
-7. [Documentation for Storage CLI Interface](#documentation-for-storage-cli-interface)
+7. [Storage CLI Interface](#storage-cli-interface)
    - [Prerequisites](#prerequisites)
    - [Commands](#commands)
      - [Store: Storing Data on the Network](#store-storing-data-on-the-network)
@@ -45,6 +45,8 @@ We consider this system to be an important stepping stone so that bittensor can 
    - [Notes](#notes)
 8. [(Optional) Setup WandB](#optional-setup-wandb)
 
+
+# Storage CLI Interface
 
 ## Overview
 The Storage CLI provides a user-friendly command-line interface for storing and retrieving data on the Bittensor network. It simplifies the process of data encryption, storage, and retrieval, ensuring security and ease of use. This tool is ideal for users who need to manage data securely on a decentralized network.
@@ -373,8 +375,6 @@ Similar to running a validator, however this exposes two axon endpoints to `stor
 ```bash
 python neurons/api.py --wallet.name <NAME> --wallet.hotkey <HOTKEY>
 ```
-
-# Documentation for Storage CLI Interface
 
 ### (Optional) Setup WandB:
 
