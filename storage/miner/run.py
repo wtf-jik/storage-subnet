@@ -84,7 +84,7 @@ def run(self):
             current_block = self.subtensor.get_current_block()
             while (
                 current_block - self.last_epoch_block
-                < self.config.miner.blocks_per_epoch
+                < self.config.miner.set_weights_epoch_length
             ):
                 # --- Wait for next bloc.
                 time.sleep(1)
@@ -117,7 +117,10 @@ def run(self):
                 wandb.log(log)
 
             # --- Set weights.
-            if not self.config.miner.no_set_weights:
+            if (
+                not self.config.miner.no_set_weights
+                and self.current_block % self.config.miner.set_weights_epoch_length == 0
+            ):
                 set_weights(
                     self.subtensor,
                     self.config.netuid,
