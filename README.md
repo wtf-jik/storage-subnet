@@ -2,11 +2,13 @@
 
 ![Subnet21](assets/Subnet21.png)
 
-FileTAO (Bittensor Subnet 21) implements a novel, multi-layered zero-knowledge interactive proof-of-spacetime algorithm by cleverly using Pedersen commitments, random challenges using elliptic curve cryptography, sequential seed-based chained hash verification, and merkle proofs to achieve an efficient, robust, secure, and highly available decetralized storage system on the Bittensor network. The system validates on encrypted user data, such that miners are unaware of what data they are storing, and only end-users may encrypt/decrypt the data they provide with their bittensor wallet coldkey.
+FileTAO (Bittensor Subnet 21) implements a novel, multi-layered zero-knowledge interactive proof-of-spacetime algorithm by cleverly using Pedersen commitments, random challenges leveraging elliptic curve cryptography, sequential seed-based chained hash verification, and merkle proofs to achieve an efficient, robust, secure, and highly available decetralized storage system on the Bittensor network. The system validates on encrypted user data, such that miners are unaware of what data they are storing, and only end-users may encrypt/decrypt the data they provide with their bittensor wallet coldkey.
 
 We consider this system to be an important stepping stone so that bittensor can fulfill it's mission of democratizing intelligence, and a decentralized AWS platform is a key brick in this wall. 
 
 **NOTICE**: Using this software, you **must** agree to the Terms and Agreements provided in the [terms and conditions](TERMS.md) document. By downloading and running this software, you implicitly agree to these terms and conditions.
+
+Currently supporting `python>=3.7,<3.11`.
 
 > Note: The storage subnet is in an alpha stage and is subject to rapid development.
 
@@ -270,7 +272,6 @@ In each phase, cryptographic primitives like hashing, commitment schemes (e.g., 
 ## Epoch UID selection
 Miners are chosen pseudorandomly using the current block hash as a random seed. This allows for public verification of which miners are selected for each challenge round (3 blocks).
 
-Only a single specific validator is only allowed to make challenge requests each epoch in a round-robin fashion based on the current `block_number % num_validators`. This is an important security measure and will allow for appropriate coverage for miner challenges as well as clarity and visiblity across the network. 
 
 For example:
 ```python
@@ -280,10 +281,6 @@ random.seed(block_hash)
 miner_uids = get_query_miners(metagraph, k = 3)
 miner_uids
 >>> [0, 4, 9] # Only these miners are allowed to be challenged this round (3 blocks, ~36 sec)
-
-validator_uid = get_validator_uid(metagraph)
-validator_uid
->>> 5 # Only this validator is allowed to query during this epoch (100 blocks, ~33 minutes)
 ```
 
 ## Installation
@@ -353,6 +350,35 @@ sudo npm install pm2 -g
 python neurons/miner.py --wallet.name <NAME> --wallet.hotkey <HOTKEY>
 ```
 
+
+#### Optimal Behavior and Reward System in Decentralized Storage Mining
+
+In FileTAO's decentralized storage system, optimal behavior is crucial for the overall health and efficiency of the network. Miners play a vital role in maintaining this ecosystem, and their actions directly impact their rewards and standing within the subnet. We have implemented a tier-based reward system to encourage proper behavior, successful challenge completions, and consistent performance.
+
+Failing to pass either challenge or retrieval verifications incur negative rewards. This is doubly destructive, as rolling statistics are continuously logged to periodically compute which tier a given miner hotkey belongs to. When a miner achieves the threshold for the next tier, the rewards that miner recieves proportionally increase. Conversely, when a miner drops below the threshold of the previous tier, that miner's rewards are slashed such that they recieve rewards proportionally to the immediately lower tier.
+
+**Why Optimal Behavior Matters:**
+1. **Reliability:** Miners who consistently store, retrieve, and pass challenges with high success rates ensure the reliability and integrity of the network.
+2. **Trust:** High-performing miners build trust in the network, attracting more users and increasing the overall value of the system.
+3. **Efficiency:** Optimal behavior leads to a more efficient network, reducing the likelihood of data loss and ensuring fast, reliable access to stored information.
+
+**Tier-Based Reward System:**
+- **Tiers:** We classify miners into four tiers – Diamond, Gold, Silver, and Bronze – based on their performance metrics.
+- **Performance Metrics:** These include the success rate in storage, retrieval, and challenge tasks, as well as the total number of successful operations.
+- **Higher Rewards for Higher Tiers:** Miners in higher tiers receive a greater proportion of the rewards, reflecting their superior performance and contribution to the network.
+
+**Moving Up Tiers:**
+- To ascend to a higher tier, a miner must maintain high success rates and achieve a set number of total successes.
+- This progression system incentivizes continuous improvement and excellence in mining operations.
+
+**Graphical Representation:**
+- The graph below illustrates how rewards increase as miners advance through the tiers. It visually represents the potential growth in earnings as miners optimize their operations and maintain high standards of performance.
+
+[bond-curve](assets/bonding.jpg)
+
+The tier-based reward system is designed to promote optimal behavior among miners, ensuring the health and efficiency of the decentralized storage network. By aligning miners' interests with those of the network, we create a robust, trustworthy, and efficient storage solution.
+
+
 ### Running a validator
 ```bash
 python neurons/validator.py --wallet.name <NAME> --wallet.hotkey <HOTKEY>
@@ -376,7 +402,7 @@ Similar to running a validator, however this exposes two axon endpoints to `stor
 python neurons/api.py --wallet.name <NAME> --wallet.hotkey <HOTKEY>
 ```
 
-### (Optional) Setup WandB:
+### Setup WandB:
 
 Weights & Biases (WANDB) is a popular tool for tracking and visualizing machine learning experiments. To use it effectively, you need to log into your WANDB account and set your API key on your system. Here's a step-by-step guide on how to do this on Ubuntu:
 

@@ -190,30 +190,39 @@ async def get_all_full_hashes(database: aioredis.Redis) -> List[str]:
 
 
 async def get_all_hotkeys_for_data_hash(
-    data_hash: str, database: aioredis.Redis
+    data_hash: str, database: aioredis.Redis, is_full_hash: bool = False
 ) -> List[str]:
     """
-    Retrieves all hotkeys associated with a specific data hash.
+    Fetch all hotkeys associated with a given hash, which can be a full file hash or a chunk hash.
 
     Parameters:
-        data_hash (str): The data hash to look up.
-        database (aioredis.Redis): The Redis client instance.
+    - data_hash (str): The hash value of the file or chunk.
+    - database (aioredis.Redis): An instance of the Redis database.
+    - is_full_hash (bool): A flag indicating if the hash_value is a full file hash.
 
     Returns:
-        A list of hotkeys associated with the data hash.
+    - List[str]: A list of hotkeys associated with the hash.
+      Returns None if no hotkeys are found.
     """
-    # Initialize an empty list to store the hotkeys
-    hotkeys = []
+    all_hotkeys = set()
 
-    # Retrieve all hotkeys (assuming keys are named with a 'hotkey:' prefix)
-    keys = await database.scan_iter("*")
-    for hotkey in keys:
-        # Check if the data hash exists within the hash of the hotkey
-        if await database.hexists(hotkey, data_hash):
-            hotkey = hotkey.decode("utf-8") if isinstance(hotkey, bytes) else hotkey
-            hotkeys.append(hotkey)
+    if is_full_hash:
+        # Get all chunks for the full hash
+        chunks_info = await get_all_chunks_for_file(data_hash, database)
+        if chunks_info is None:
+            return None
+        # Aggregate hotkeys from all chunks
+        for chunk_info in chunks_info.values():
+            all_hotkeys.update(chunk_info["hotkeys"])
+    else:
+        # Fetch hotkeys for a single chunk hash
+        chunk_metadata = await database.hgetall(f"chunk:{data_hash}")
+        if chunk_metadata:
+            hotkeys = chunk_metadata.get(b"hotkeys")
+            if hotkeys:
+                all_hotkeys.update(hotkeys.decode().split(","))
 
-    return hotkeys
+    return list(all_hotkeys)
 
 
 async def total_hotkey_storage(hotkey: str, database: aioredis.Redis) -> int:
@@ -255,12 +264,12 @@ async def hotkey_at_capacity(hotkey: str, database: aioredis.Redis) -> bool:
     # Check if the hotkey is at capacity
     byte_limit = await database.hget(f"stats:{hotkey}", "storage_limit")
     if byte_limit is None:
-        bt.logging.warning(f"Could not find storage limit for {hotkey}.")
+        bt.logging.trace(f"Could not find storage limit for {hotkey}.")
         return False
     try:
         limit = int(byte_limit)
     except Exception as e:
-        bt.logging.warning(f"Could not parse storage limit for {hotkey} | {e}.")
+        bt.logging.trace(f"Could not parse storage limit for {hotkey} | {e}.")
         return False
     if total_storage >= limit:
         bt.logging.trace(f"Hotkey {hotkey} is at max capacity {limit // 1024**3} GB.")
@@ -660,3 +669,42 @@ async def retrieve_mutually_exclusive_hotkeys_full_hash(
                 mutually_exclusive_hotkeys[chunk_info["chunk_hash"]].append(hotkey)
 
     return mutually_exclusive_hotkeys
+
+
+async def check_hash_type(data_hash: str, database: aioredis.Redis) -> str:
+    """
+    Determine if the data_hash is a full file hash, a chunk hash, or a standalone challenge hash.
+
+    Parameters:
+    - data_hash (str): The data hash to check.
+    - database (aioredis.Redis): The Redis database client.
+
+    Returns:
+    - str: A string indicating the type of hash ('full_file', 'chunk', or 'standalone_challenge').
+    """
+    is_full_file = await database.exists(f"file:{data_hash}")
+    if is_full_file:
+        return "full_file"
+
+    is_chunk = await database.exists(f"chunk:{data_hash}")
+    if is_chunk:
+        return "chunk"
+
+    return "standalone_challenge"
+
+
+async def is_file_chunk(chunk_hash: str, database: aioredis.Redis) -> str:
+    """
+    Determines if the given chunk_hash is part of a full file.
+
+    Parameters:
+    - chunk_hash (str): The hash of the chunk to check.
+    - database (aioredis.Redis): The Redis database client.
+
+    Returns:
+    - bool: True if the hash belongs to a full file, false otherwise (challenge data)
+    """
+    async for key in database.scan_iter(match="chunk:*"):
+        if chunk_hash in key.decode():
+            return True
+    return False

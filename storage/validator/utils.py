@@ -296,7 +296,7 @@ def get_all_validators(self, return_hotkeys=False):
     query_idxs = torch.where(
         self.metagraph.S[vpermit_uids] > self.config.neuron.vpermit_tao_limit
     )[0]
-    query_uids = vpermit_uids[query_idxs]
+    query_uids = vpermit_uids[query_idxs].tolist()
 
     return (
         [self.metagraph.hotkeys[uid] for uid in query_uids]
@@ -314,7 +314,7 @@ def get_all_miners(self):
     """
     # Determine miner axons to query from metagraph
     vuids = get_all_validators(self)
-    return [uid.item() for uid in self.metagraph.uids if uid not in vuids]
+    return [uid for uid in self.metagraph.uids.tolist() if uid not in vuids]
 
 
 def get_query_miners(self, k=20, exlucde=None):
@@ -345,7 +345,7 @@ def get_query_validators(self, k=3):
         list: A list of pseudorandomly selected available validator UIDs
     """
     vuids = get_all_validators(self)
-    return get_pseudorandom_uids(self.subtensor, uids=vuids.tolist(), k=k)
+    return get_pseudorandom_uids(self.subtensor, uids=vuids, k=k)
 
 
 async def get_available_query_miners(self, k, exclude=None):
@@ -378,7 +378,7 @@ def get_current_validator_uid_pseudorandom(self):
     block_seed = get_block_seed(self.subtensor)
     pyrandom.seed(block_seed)
     vuids = get_query_validators(self)
-    return pyrandom.choice(vuids).item()
+    return pyrandom.choice(vuids)
 
 
 def get_current_validtor_uid_round_robin(self):
@@ -390,7 +390,7 @@ def get_current_validtor_uid_round_robin(self):
     """
     vuids = get_all_validators(self)
     vidx = self.subtensor.get_current_block() // 100 % len(vuids)
-    return vuids[vidx].item()
+    return vuids[vidx]
 
 
 def generate_efficient_combinations(available_uids, R):
@@ -705,7 +705,7 @@ def calculate_chunk_indices_from_num_chunks(data_size, num_chunks):
 
 
 async def compute_chunk_distribution_mut_exclusive_numpy_reuse_uids(
-    self, data_size, R, k, chunk_size=None
+    self, data_size, R, k, chunk_size=None, exclude=None
 ):
     """
     Asynchronously computes a distribution of data chunks across a set of unique identifiers (UIDs),
@@ -734,7 +734,7 @@ async def compute_chunk_distribution_mut_exclusive_numpy_reuse_uids(
           the redundancy requirements are met.
     """
 
-    available_uids = await get_available_query_miners(self, k=k)
+    available_uids = await get_available_query_miners(self, k=k, exclude=exclude)
     chunk_size = chunk_size or optimal_chunk_size(data_size, len(available_uids), R)
     available_uids = adjust_uids_to_multiple(available_uids, R)
     chunk_indices = calculate_chunk_indices(data_size, chunk_size)
@@ -764,164 +764,3 @@ async def compute_chunk_distribution_mut_exclusive_numpy_reuse_uids(
             "uids": uid_group,
             "chunk_index": i,
         }
-
-
-def compute_chunk_distribution_mut_exclusive_file(self, file_path, R, k):
-    """
-    Computes and yields the distribution of data chunks to UIDs directly from a file,
-    ensuring mutually exclusive UID sets for each chunk.
-
-    Args:
-        file_path (str): The path to the file from which data chunks are to be read.
-        R (int): The redundancy factor, defining the number of UIDs assigned to each chunk.
-        k (int): The number of unique UIDs available for assignment.
-
-    Yields:
-        dict: A dictionary for each chunk with its hash, the chunk data, and the associated UIDs.
-
-    Raises:
-        ValueError: If the redundancy factor exceeds the number of available UIDs or if the
-                    number of available UIDs is not a multiple of the redundancy factor.
-    """
-    available_uids = get_query_miners(self, k=k)
-
-    # Getting the size of the file
-    data_size = os.path.getsize(file_path)
-    chunk_size = optimal_chunk_size(data_size, len(available_uids), R)
-
-    available_uids = adjust_uids_to_multiple(available_uids, R)
-
-    if R > len(available_uids):
-        raise ValueError(
-            "Redundancy factor cannot be greater than the number of available UIDs."
-        )
-
-    uid_groups = partition_uids(available_uids, R)
-
-    # Read and process chunks from the file
-    with open(file_path, "rb") as file:
-        for uid_group in uid_groups:
-            chunk = file.read(chunk_size)
-            if not chunk:
-                break  # End of file
-            chunk_hash = hash_data(chunk)
-            yield {chunk_hash: {"chunk": chunk, "uids": uid_group}}
-
-
-def pre_process_chunk_distribution_file(self, file_path, R, k):
-    """
-    Pre-processes and returns metadata for each chunk of a file, including file path,
-    start position, chunk size, and associated UIDs. This allows for efficient,
-    on-demand loading of data chunks.
-
-    Args:
-        file_path (str): The path to the file to be processed.
-        R (int): The redundancy factor, defining the number of UIDs assigned to each chunk.
-        k (int): The number of unique UIDs available for assignment.
-
-    Returns:
-        list: A list of dictionaries, each containing metadata for a chunk of the file.
-              Each dictionary includes the file path, start position, chunk size, and UIDs.
-
-    Raises:
-        ValueError: If the redundancy factor exceeds the number of available UIDs or if the
-                    number of available UIDs is not a multiple of the redundancy factor.
-    """
-    available_uids = get_query_miners(self, k=k)
-
-    data_size = os.path.getsize(file_path)
-    chunk_size = optimal_chunk_size(data_size, len(available_uids), R)
-
-    available_uids = adjust_uids_to_multiple(available_uids, R)
-
-    if R > len(available_uids):
-        raise ValueError(
-            "Redundancy factor cannot be greater than the number of available UIDs."
-        )
-
-    uid_groups = partition_uids(available_uids, R)
-    chunk_meta_data = []
-
-    # Calculate the number of chunks and their metadata
-    num_chunks = data_size // chunk_size + (1 if data_size % chunk_size != 0 else 0)
-    for i in range(num_chunks):
-        start_pos = i * chunk_size
-        chunk_meta_data.append(
-            {
-                "start_pos": start_pos,
-                "chunk_size": chunk_size,
-                "uids": uid_groups[i % len(uid_groups)],
-            }
-        )
-
-    return chunk_meta_data
-
-
-def yield_chunk_distribution_file(self, file_path, R, k):
-    """
-    Yields metadata and UIDs for each chunk of a file, enabling efficient, on-demand data processing.
-    This function calculates the distribution of data chunks across a set of UIDs, ensuring mutually exclusive UID sets
-    for each chunk based on the file's size.
-
-    Args:
-        file_path (str): The path to the file from which data chunks will be processed.
-        R (int): The redundancy factor, defining the number of UIDs to be associated with each data chunk.
-        k (int): The total number of UIDs available for distribution across the chunks.
-
-    Yields:
-        tuple: A tuple for each chunk, containing a list of UIDs for the chunk and a dictionary
-               with the chunk's metadata (file path, start position, and chunk size).
-
-    Raises:
-        ValueError: If the redundancy factor R is greater than the number of available UIDs or
-                    if the available UIDs are not a multiple of R, ensuring exclusive distribution.
-
-    Note:
-        This function is designed for efficient handling of large files, as it computes and yields
-        the chunk distribution without loading the entire file into memory. It is particularly useful
-        for scenarios where data needs to be processed in segments and associated with unique sets
-        of UIDs for tasks like distributed storage or parallel processing.
-    """
-    available_uids = get_query_miners(self, k=k)
-
-    data_size = os.path.getsize(file_path)
-    chunk_size = optimal_chunk_size(data_size, len(available_uids), R)
-
-    if R > len(available_uids):
-        raise ValueError(
-            "Redundancy factor cannot be greater than the number of available UIDs."
-        )
-    if len(available_uids) % R != 0:
-        raise ValueError(
-            "Number of available UIDs must be a multiple of the redundancy factor R."
-        )
-
-    uid_groups = partition_uids(available_uids, R)
-
-    # Calculate the number of chunks and their metadata
-    num_chunks = data_size // chunk_size + (1 if data_size % chunk_size != 0 else 0)
-    for i in range(num_chunks):
-        start_pos = i * chunk_size
-        chunk_meta = {
-            "file_path": file_path,
-            "start_pos": start_pos,
-            "chunk_size": chunk_size,
-        }
-        yield uid_groups[i % len(uid_groups)], load_chunk(chunk_meta)
-
-
-def load_chunk(chunk_meta):
-    """
-    Loads a specific data chunk from a file based on provided metadata.
-
-    Args:
-        chunk_meta (dict): A dictionary containing metadata for the chunk,
-                           including the file path, start position, and chunk size.
-
-    Returns:
-        dict: A dictionary containing the loaded chunk data and its associated UIDs.
-    """
-    with open(chunk_meta["file_path"], "rb") as file:
-        file.seek(chunk_meta["start_pos"])
-        chunk_data = file.read(chunk_meta["chunk_size"])
-        return {"chunk_data": chunk_data, "uids": chunk_meta["uids"]}

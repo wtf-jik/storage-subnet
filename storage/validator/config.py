@@ -90,7 +90,7 @@ def add_args(cls, parser):
         "--neuron.min_chunk_size",
         default=256,
         type=int,
-        help="Minimum chunk size of random data to challenge.",
+        help="Minimum chunk size of random data to challenge (bytes).",
     )
     parser.add_argument(
         "--neuron.override_chunk_size",
@@ -101,7 +101,7 @@ def add_args(cls, parser):
     parser.add_argument(
         "--neuron.store_redundancy",
         type=int,
-        default=3,
+        default=4,
         help="Number of miners to store each piece of data on.",
     )
     parser.add_argument(
@@ -123,10 +123,16 @@ def add_args(cls, parser):
         help="Number of steps before random retrieve epoch is complete.",
     )
     parser.add_argument(
-        "--neuron.tier_update_step_length",
+        "--neuron.compute_stats_interval",
         type=int,
         default=100,
-        help="Number of steps before tier update epoch is complete.",
+        help="Number of steps before computing and logging all stats.",
+    )
+    parser.add_argument(
+        "--neuron.max_failed_pings",
+        type=int,
+        default=3,
+        help="Number of failed periodic pings before a miner is considered offline.",
     )
     parser.add_argument(
         "--neuron.set_weights_epoch_length",
@@ -174,19 +180,19 @@ def add_args(cls, parser):
         "--neuron.store_timeout",
         type=float,
         help="Store data query timeout.",
-        default=60,
+        default=30,
     )
     parser.add_argument(
         "--neuron.challenge_timeout",
         type=float,
         help="Challenge data query timeout.",
-        default=30,
+        default=20,
     )
     parser.add_argument(
         "--neuron.retrieve_timeout",
         type=float,
         help="Retreive data query timeout.",
-        default=60,
+        default=30,
     )
     parser.add_argument(
         "--neuron.checkpoint_block_length",
@@ -195,10 +201,22 @@ def add_args(cls, parser):
         default=100,
     )
     parser.add_argument(
+        "--neuron.distribute_step_length",
+        type=int,
+        help="Blocks before a distribute step is taken.",
+        default=10,
+    )
+    parser.add_argument(
         "--neuron.blocks_per_step",
         type=int,
         help="Blocks before a step is taken.",
         default=3,
+    )
+    parser.add_argument(
+        "--neuron.monitor_step_length",
+        type=int,
+        help="Number of steps before calling monitor for down uids.",
+        default=5,
     )
     parser.add_argument(
         "--neuron.events_retention_size",
@@ -216,7 +234,7 @@ def add_args(cls, parser):
         "--neuron.vpermit_tao_limit",
         type=int,
         help="The maximum number of TAO allowed to query a validator with a vpermit.",
-        default=4096,
+        default=2000,
     )
     parser.add_argument(
         "--neuron.verbose",
@@ -339,6 +357,11 @@ def add_args(cls, parser):
         type=list,
         help="List of whitelisted hotkeys.",
         default=[],
+    )
+    parser.add_argument(
+        "--api.debug",
+        action="store_true",
+        help="If set, we whitelist by default to test easily.",
     )
 
 
