@@ -63,12 +63,11 @@ def check_config(cls, config: "bt.Config"):
                 config.neuron.full_path + "/" + "miner_stats.json"
             )
         )
-        config.neuron.miner_stats_path = os.path.expanduser(
+        config.neuron.hash_map_path = os.path.expanduser(
             os.path.join(
-                config.neuron.full_path + "/" + "miner_stats.json"
+                config.neuron.full_path + "/" + "hash_map.json"
             )
         )
-
         config.neuron.total_storage_path = os.path.expanduser(
             os.path.join(
                 config.neuron.full_path + "/" + "total_storage.json"
