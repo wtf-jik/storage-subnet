@@ -17,6 +17,7 @@
 # DEALINGS IN THE SOFTWARE.
 
 import os
+import time
 import torch
 import argparse
 import bittensor as bt
@@ -59,20 +60,24 @@ def check_config(cls, config: "bt.Config"):
 
         # Set miner stats and total storage save path
         config.neuron.miner_stats_path = os.path.expanduser(
-            os.path.join(
-                config.neuron.full_path + "/" + "miner_stats.json"
-            )
+            os.path.join(config.neuron.full_path + "/" + "miner_stats.json")
         )
         config.neuron.hash_map_path = os.path.expanduser(
-            os.path.join(
-                config.neuron.full_path + "/" + "hash_map.json"
-            )
+            os.path.join(config.neuron.full_path + "/" + "hash_map.json")
         )
         config.neuron.total_storage_path = os.path.expanduser(
-            os.path.join(
-                config.neuron.full_path + "/" + "total_storage.json"
-            )
+            os.path.join(config.neuron.full_path + "/" + "total_storage.csv")
         )
+
+        if config.database.purge_challenges:
+            bt.logging.warning(
+                "Purging all challenges from ALL miners! Waiting 60 sec in case this is unintentional..."
+            )
+            bt.logging.warning(
+                "Please abort the process if you are not intending to purge all your challenge data!"
+            )
+            time.sleep(60)
+
 
 def add_args(cls, parser):
     # Netuid Arg
@@ -196,7 +201,7 @@ def add_args(cls, parser):
         "--neuron.store_timeout",
         type=float,
         help="Store data query timeout.",
-        default=30,
+        default=60,
     )
     parser.add_argument(
         "--neuron.challenge_timeout",
@@ -208,7 +213,7 @@ def add_args(cls, parser):
         "--neuron.retrieve_timeout",
         type=float,
         help="Retreive data query timeout.",
-        default=30,
+        default=60,
     )
     parser.add_argument(
         "--neuron.checkpoint_block_length",
@@ -288,6 +293,12 @@ def add_args(cls, parser):
         "--database.index",
         default=1,
         help="The database number of the redis database.",
+    )
+    parser.add_argument(
+        "--database.purge_challenges",
+        action="store_true",
+        help="If set, we will purge all challenges from ALL miners on start.",
+        default=False,
     )
 
     # Wandb args

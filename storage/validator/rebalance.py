@@ -20,14 +20,22 @@ import typing
 import bittensor as bt
 
 from pprint import pformat
-from storage.validator.database import is_file_chunk, get_metadata_for_hotkey
-from storage.validator.database import retrieve_encryption_payload
+from storage.validator.database import (
+    is_file_chunk,
+    get_metadata_for_hotkey,
+    retrieve_encryption_payload,
+    remove_hotkey_from_chunk,
+    purge_challenges_for_hotkey,
+)
+from storage.validator.bonding import register_miner
 
 from .retrieve import retrieve_data
 from .store import store_encrypted_data
 
 
-async def rebalance_data_for_hotkey(self, k: int, source_hotkey: str):
+async def rebalance_data_for_hotkey(
+    self, k: int, source_hotkey: str, hotkey_replaced: bool = False
+):
     """
     TODO: This might take a while, would be better to run in a separate process/thread
     rather than block other validator duties?
@@ -56,7 +64,25 @@ async def rebalance_data_for_hotkey(self, k: int, source_hotkey: str):
         if await is_file_chunk(_hash, self.database):
             rebalance_hashes.append(_hash)
 
-    bt.logging.debug(f"rebalance hashes: {rebalance_hashes[:5]}")
+    bt.logging.trace(f"rebalance full hashes: {rebalance_hashes[:5]}")
+
+    if hotkey_replaced:
+        # Reset miner statistics
+        await register_miner(source_hotkey, self.database)
+        # Update index for full and chunk hashes for retrieve
+        # Iterate through ordered metadata for all full hashses this miner had
+        async for file_key in self.databse.scan_iter("file:*"):
+            file_key = file_key.decode("utf-8")
+            file_hash = file_key.split(":")[1]
+            # Get all ordered metadata for this file
+            ordered_metadata = await get_ordered_metadata(file_hash, self.database)
+            for chunk_metadata in ordered_metadata:
+                # Remove the dropped miner from the chunk metadata
+                await remove_hotkey_from_chunk(
+                    chunk_metadata, source_hotkey, self.database
+                )
+        # Purge challenge hashes so new miner doesn't get hosed
+        await purge_challenges_for_hotkey(source_hotkey, self.database)
 
     for _hash in rebalance_hashes:
         await rebalance_data_for_hash(self, data_hash=_hash, k=k)
@@ -70,9 +96,16 @@ async def rebalance_data_for_hash(self, data_hash: str, k: int):
     await store_encrypted_data(self, data, payload, k=k)
 
 
-async def rebalance_data(self, k: int = 2, dropped_hotkeys: typing.List[str] = []):
+async def rebalance_data(
+    self,
+    k: int = 2,
+    dropped_hotkeys: typing.List[str] = [],
+    hotkey_replaced: bool = False,
+):
     if isinstance(dropped_hotkeys, str):
         dropped_hotkeys = [dropped_hotkeys]
 
     for hotkey in dropped_hotkeys:
-        await rebalance_data_for_hotkey(self, k, hotkey)
+        await rebalance_data_for_hotkey(
+            self, k, hotkey, hotkey_replaced=hotkey_replaced
+        )

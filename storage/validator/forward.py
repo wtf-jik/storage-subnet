@@ -16,7 +16,10 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
+import os
+import csv
 import json
+import time
 import bittensor as bt
 
 from storage.validator.config import config, check_config, add_args
@@ -76,6 +79,7 @@ async def forward(self):
             self,
             k=2,  # increase redundancy
             dropped_hotkeys=[self.metagraph.hotkeys[uid] for uid in down_uids],
+            hotkey_replaced=False,  # Don't delete challenge data (only in subscription handler)
         )
 
     if self.step % self.config.neuron.compute_stats_interval == 0:
@@ -86,12 +90,6 @@ async def forward(self):
 
         # Log all chunk hash <> hotkey pairs
         chunk_hash_map = await get_all_chunk_hashes(self.database)
-
-        # Update the total network storage
-        total_storage = await total_network_storage(self.database)
-        bt.logging.info(
-            f"Total network storage (GB): {int(total_storage) // (1024**3)}"
-        )
 
         # Log the statistics, storage, and hashmap to wandb.
         if not self.config.wandb.off:
@@ -104,9 +102,39 @@ async def forward(self):
                 json.dump(chunk_hash_map, file)
 
             self.wandb.save(self.config.neuron.hash_map_path)
-            
-            with open(self.config.neuron.total_storage_path, "w") as file:
-                json.dump(total_storage, file)
 
-            self.wandb.log({"total_storage": total_storage})
+            # Also upload the total network storage periodically
             self.wandb.save(self.config.neuron.total_storage_path)
+
+    # Update the total network storage
+    total_storage = await total_network_storage(self.database)
+    bt.logging.info(f"Total network storage (GB): {int(total_storage) // (1024**3)}")
+
+    # Get the current local time
+    current_time = time.localtime()
+
+    # Format the time in a readable format, for example: "Year-Month-Day Hour:Minute:Second"
+    formatted_time = time.strftime("%Y-%m-%d %H:%M:%S", current_time)
+
+    total_storage_time = {
+        "total_storage": total_storage,
+        "timestamp": formatted_time,
+    }
+
+    # Check if the CSV already exists
+    file_exists = os.path.isfile(self.config.neuron.total_storage_path)
+
+    # Open the CSV file in append mode
+    with open(self.config.neuron.total_storage_path, "a", newline="") as csvfile:
+        # Define the field names
+        fieldnames = ["total_storage", "timestamp"]
+
+        # Create a writer object specifying the field names
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+        # Write the header only if the file is being created
+        if not file_exists:
+            writer.writeheader()
+
+        # Write the data row
+        writer.writerow(total_storage_time)

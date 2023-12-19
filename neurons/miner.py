@@ -491,6 +491,8 @@ class miner:
             Assuming an initialized 'committer' object and 'synapse' with necessary data:
             >>> updated_synapse = self.store(synapse)
         """
+        bt.logging.info(f"recieved store hash: {synapse.data_hash}")
+
         # Decode the data from base64 to raw bytes
         encrypted_byte_data = base64.b64decode(synapse.encrypted_data)
 
@@ -510,7 +512,7 @@ class miner:
             filepath = save_data_to_filesystem(
                 encrypted_byte_data, self.config.database.directory, str(data_hash)
             )
-            bt.logging.debug(f"stored data {data_hash} in filepath: {filepath}")
+            bt.logging.info(f"stored data {data_hash} in filepath: {filepath}")
             # Add the initial chunk, size, and validator seed information
             await store_chunk_metadata(
                 self.database,
@@ -545,6 +547,9 @@ class miner:
             bt.logging.trace(f"type(seed): {type(synapse.seed)}")
             bt.logging.trace(f"initial commitment_hash: {synapse.commitment_hash}")
 
+        bt.logging.info(
+            f"stored data {data_hash} with commitment: {synapse.commitment}"
+        )
         return synapse
 
     async def challenge(
@@ -582,7 +587,7 @@ class miner:
             >>> updated_synapse = self.challenge(synapse)
         """
         # Retrieve the data itself from miner storage
-        bt.logging.debug(f"recieved challenge hash: {synapse.challenge_hash}")
+        bt.logging.info(f"recieved challenge hash: {synapse.challenge_hash}")
         data = await get_chunk_metadata(self.database, synapse.challenge_hash)
         if data is None:
             bt.logging.error(f"No data found for {synapse.challenge_hash}")
@@ -591,24 +596,28 @@ class miner:
         bt.logging.debug(f"retrieved data: {pformat(data)}")
 
         # Chunk the data according to the specified (random) chunk size
-        filepath = data[b"filepath"]
+        filepath = data.get(b"filepath", None)
+        if filepath is None:
+            bt.logging.error(f"No file found for {synapse.challenge_hash}")
+            return synapse
+
         encrypted_data_bytes = load_from_filesystem(filepath)
 
         # Construct the next commitment hash using previous commitment and hash
         # of the data to prove storage over time
-        prev_seed = data[b"seed"].encode()
+        prev_seed = data.get(b"seed", "").encode()
+        if prev_seed == None:
+            bt.logging.error(f"No seed found for {synapse.challenge_hash}")
+            return synapse
+
         new_seed = synapse.seed.encode()
         next_commitment, proof = compute_subsequent_commitment(
             encrypted_data_bytes, prev_seed, new_seed, verbose=self.config.miner.verbose
         )
-        if self.config.miner.verbose:
-            bt.logging.debug(
-                f"types: prev_seed {str(type(prev_seed))}, new_seed {str(type(new_seed))}, proof {str(type(proof))}"
-            )
-            bt.logging.debug(f"prev seed : {prev_seed}")
-            bt.logging.debug(f"new seed  : {new_seed}")
-            bt.logging.debug(f"proof     : {proof}")
-            bt.logging.debug(f"commitment: {next_commitment}\n")
+        bt.logging.trace(f"prev seed : {prev_seed}")
+        bt.logging.trace(f"new seed  : {new_seed}")
+        bt.logging.trace(f"proof     : {proof}")
+        bt.logging.trace(f"commitment: {next_commitment}\n")
         synapse.commitment_hash = next_commitment
         synapse.commitment_proof = proof
 
@@ -642,12 +651,11 @@ class miner:
             merkle_tree.get_proof(synapse.challenge_index)
         )
         synapse.merkle_root = merkle_tree.get_merkle_root()
-        if self.config.miner.verbose:
-            bt.logging.debug(f"commitment: {synapse.commitment}")
-            bt.logging.debug(f"data_chunk: {synapse.data_chunk}")
-            bt.logging.debug(f"randomness: {synapse.randomness}")
-            bt.logging.debug(f"merkle_proof: {synapse.merkle_proof}")
-            bt.logging.debug(f"merkle_root: {synapse.merkle_root}")
+        bt.logging.trace(f"commitment: {str(synapse.commitment)[:24]}")
+        bt.logging.trace(f"randomness: {str(synapse.randomness)[:24]}")
+        bt.logging.trace(f"merkle_proof[0]: {str(synapse.merkle_proof[0])}")
+        bt.logging.trace(f"merkle_root: {str(synapse.merkle_root)[:24]}")
+        bt.logging.info(f"returning challenge data {synapse.data_chunk[:24]}...")
         return synapse
 
     async def retrieve(
@@ -683,6 +691,8 @@ class miner:
             Assuming an initialized 'synapse' with a data hash and seed:
             >>> updated_synapse = self.retrieve(synapse)
         """
+        bt.logging.info(f"recieved retrieve hash: {synapse.data_hash}")
+
         # Fetch the data from the miner database
         data = await get_chunk_metadata(self.database, synapse.data_hash)
 
@@ -690,7 +700,10 @@ class miner:
         bt.logging.debug(f"retrieved data: {pformat(data)}")
 
         # load the data from the filesystem
-        filepath = data[b"filepath"]
+        filepath = data.get(b"filepath", None)
+        if filepath == None:
+            bt.logging.error(f"No file found for {synapse.data_hash}")
+            return synapse
         encrypted_data_bytes = load_from_filesystem(filepath)
 
         # incorporate a final seed challenge to verify they still have the data at retrieval time
@@ -709,6 +722,8 @@ class miner:
 
         # Return base64 data
         synapse.data = base64.b64encode(encrypted_data_bytes)
+
+        bt.logging.info(f"returning retrieved data {synapase.data[:24]}...")
         return synapse
 
     def run(self):

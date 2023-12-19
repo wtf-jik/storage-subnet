@@ -45,6 +45,23 @@ async def add_metadata_to_hotkey(
     bt.logging.trace(f"Associated data hash {data_hash} with hotkey {ss58_address}.")
 
 
+async def remove_metadata_from_hotkey(
+    ss58_address: str, data_hash: str, database: aioredis.Redis
+):
+    """
+    Removes a data hash and its metadata from a hotkey in Redis.
+
+    Parameters:
+        ss58_address (str): The primary key representing the hotkey.
+        data_hash (str): The subkey representing the data hash.
+        database (aioredis.Redis): The Redis client instance.
+    """
+    # Use HDEL to remove the data hash from the hotkey
+    key = f"hotkey:{ss58_address}"
+    await database.hdel(key, data_hash)
+    bt.logging.trace(f"Removed data hash {data_hash} from hotkey {ss58_address}.")
+
+
 async def get_metadata_for_hotkey(
     ss58_address: str, database: aioredis.Redis
 ) -> Dict[str, dict]:
@@ -88,6 +105,23 @@ async def get_hashes_for_hotkey(
     return [
         data_hash.decode("utf-8") for data_hash, metadata in all_data_hashes.items()
     ]
+
+
+async def remove_hashes_for_hotkey(
+    ss58_address: str, hashes: list, database: aioredis.Redis
+) -> List[str]:
+    """
+    Retrieves all data hashes and their metadata for a given hotkey.
+
+    Parameters:
+        ss58_address (str): The key representing the hotkey.
+        database (aioredis.Redis): The Redis client instance.
+
+    Returns:
+        A dictionary where keys are data hashes and values are the associated metadata.
+    """
+    for _hash in hashes:
+        await remove_metadata_from_hotkey(ss58_address, _hash, database)
 
 
 async def update_metadata_for_data_hash(
@@ -582,6 +616,40 @@ async def add_hotkey_to_chunk(chunk_hash: str, hotkey: str, database: aioredis.R
         print(f"UID {hotkey} set for new chunk {chunk_hash}.")
 
 
+async def remove_hotkey_from_chunk(
+    chunk_hash: str, hotkey: str, database: aioredis.Redis
+):
+    """
+    Remove a hotkey from the metadata of a specific chunk.
+
+    This function updates the chunk's metadata to remove the given hotkey. If the hotkey is not
+    associated with the chunk, no changes are made.
+
+    Parameters:
+    - chunk_hash (str): The hash of the chunk to which the hotkey is to be added.
+    - hotkey (str): The hotkey to add to the chunk's metadata.
+    - database (aioredis.Redis): An instance of the Redis database.
+    """
+    chunk_metadata_key = f"chunk:{chunk_hash}"
+
+    # Fetch existing UIDs for the chunk
+    existing_metadata = await database.hget(chunk_metadata_key, "hotkeys")
+    if existing_metadata:
+        existing_hotkeys = existing_metadata.decode().split(",")
+
+        # Remove UID if it's in the list
+        if hotkey in existing_hotkeys:
+            existing_hotkeys.remove(hotkey)
+            await database.hset(
+                chunk_metadata_key, "hotkeys", ",".join(existing_hotkeys)
+            )
+            bt.logging.trace(f"UID {hotkey} removed from chunk {chunk_hash}.")
+        else:
+            bt.logging.trace(f"UID {hotkey} does not exist for chunk {chunk_hash}.")
+    else:
+        bt.logging.trace(f"No UIDs associated with chunk {chunk_hash}.")
+
+
 async def store_chunk_metadata(
     full_hash: str,
     chunk_hash: str,
@@ -680,7 +748,7 @@ async def check_hash_type(data_hash: str, database: aioredis.Redis) -> str:
     - database (aioredis.Redis): The Redis database client.
 
     Returns:
-    - str: A string indicating the type of hash ('full_file', 'chunk', or 'standalone_challenge').
+    - str: A string indicating the type of hash ('full_file', 'chunk', or 'challenge').
     """
     is_full_file = await database.exists(f"file:{data_hash}")
     if is_full_file:
@@ -690,7 +758,7 @@ async def check_hash_type(data_hash: str, database: aioredis.Redis) -> str:
     if is_chunk:
         return "chunk"
 
-    return "standalone_challenge"
+    return "challenge"
 
 
 async def is_file_chunk(chunk_hash: str, database: aioredis.Redis) -> str:
@@ -708,3 +776,103 @@ async def is_file_chunk(chunk_hash: str, database: aioredis.Redis) -> str:
         if chunk_hash in key.decode():
             return True
     return False
+
+
+async def get_all_hashes_in_database(database: aioredis.Redis) -> List[str]:
+    """
+    Retrieves all hashes from the Redis instance.
+
+    Parameters:
+        database (aioredis.Redis): The Redis client instance.
+
+    Returns:
+        A list of hashes.
+    """
+    all_hashes = set()
+
+    async for hotkey_key in database.scan_iter(match="hotkey:*"):
+        all_hashes.update(list(await database.hgetall(hotkey_hey)))
+
+    return list(all_hashes)
+
+
+async def get_all_challenge_hashes(database: aioredis.Redis) -> List[str]:
+    """
+    Retrieves all challenge hashes from the Redis instance.
+
+    Parameters:
+        database (aioredis.Redis): The Redis client instance.
+
+    Returns:
+        A list of challenge hashes.
+    """
+    all_hashes = await get_all_hashes_in_database(database)
+
+    challenge_hashes = []
+    for h in all_hashes:
+        if await check_hash_type(h, database) == "challenge":
+            challenge_hashes.append(h)
+
+    return challenge_hashes
+
+
+async def get_challenges_for_hotkey(ss58_address: str, database: aioredis.Redis):
+    """
+    Retrieves a list of challenge hashes associated with a specific hotkey.
+
+    This function scans through all the hashes related to a given hotkey and filters out
+    those which are identified as challenge data. It's useful for identifying which
+    challenges a particular miner (identified by hotkey) is involved with.
+
+    Parameters:
+    - ss58_address (str): The hotkey (miner identifier) whose challenge hashes are to be retrieved.
+    - database (aioredis.Redis): An instance of the Redis database used for data storage.
+
+    Returns:
+    - List[str]: A list of challenge hashes associated with the given hotkey.
+      Returns an empty list if no challenge data is associated with the hotkey.
+    """
+    hashes = list(await database.hgetall(f"hotkey:{ss58_address}"))
+    challenges = []
+    for j, h in enumerate(hashes):
+        if await check_hash_type(h, database) == "challenge":
+            challenges.append(h)
+
+    return challenges
+
+
+async def purge_challenges_for_hotkey(ss58_address: str, database: aioredis.Redis):
+    """
+    Purges (deletes) all challenge hashes associated with a specific hotkey.
+
+    This function is used for housekeeping purposes in the database, allowing for the
+    removal of all challenge data related to a particular miner (hotkey). This can be
+    useful for clearing outdated or irrelevant challenge data from the database.
+
+    Parameters:
+    - ss58_address (str): The hotkey (miner identifier) whose challenge hashes are to be purged.
+    - database (aioredis.Redis): An instance of the Redis database used for data storage.
+    """
+    challenge_hashes = await get_challenges_for_hotkey(ss58_address, database)
+    bt.logging.trace(f"purging challenges for {ss58_address}...")
+    for ch in challenge_hashes:
+        await database.delete(ch)
+
+
+async def purge_challenges_for_all_hotkeys(database: aioredis.Redis):
+    """
+    Purges (deletes) all challenge hashes for every hotkey in the database.
+
+    This function performs a comprehensive cleanup of the database by removing all
+    challenge-related data. It iterates over each hotkey in the database and
+    individually purges the challenge hashes associated with them. This is particularly
+    useful for global maintenance tasks where outdated or irrelevant challenge data
+    needs to be cleared from the entire database. For example, when a UID is replaced.
+
+    Parameters:
+    - database (aioredis.Redis): An instance of the Redis database used for data storage.
+    """
+    bt.logging.trace(f"purging challenges for ALL hotkeys...")
+    async for hotkey in database.scan_iter(match="hotkey:*"):
+        hotkey = hotkey.decode().split(":")[1]
+        await purge_challenges_for_hotkey(hotkey, database)
