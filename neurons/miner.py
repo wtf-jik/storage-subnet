@@ -491,14 +491,12 @@ class miner:
             Assuming an initialized 'committer' object and 'synapse' with necessary data:
             >>> updated_synapse = self.store(synapse)
         """
-        bt.logging.info(f"recieved store hash: {synapse.data_hash}")
+        bt.logging.info(f"received store request: {synapse.encrypted_data[:24]}")
 
         # Decode the data from base64 to raw bytes
         encrypted_byte_data = base64.b64decode(synapse.encrypted_data)
 
-        if self.config.miner.verbose:
-            bt.logging.debug(f"store b64encrypted data: {synapse.encrypted_data[:200]}")
-            bt.logging.debug(f"store b64decrypted data: {encrypted_byte_data[:200]}")
+        bt.logging.debug(f"store b64decrypted data: {encrypted_byte_data[:24]}")
 
         # Store the data with the hash as the key in the filesystem
         data_hash = hash_data(encrypted_byte_data)
@@ -548,7 +546,7 @@ class miner:
             bt.logging.trace(f"initial commitment_hash: {synapse.commitment_hash}")
 
         bt.logging.info(
-            f"stored data {data_hash} with commitment: {synapse.commitment}"
+            f"stored data hash {data_hash} with commitment: {synapse.commitment}"
         )
         return synapse
 
@@ -601,7 +599,13 @@ class miner:
             bt.logging.error(f"No file found for {synapse.challenge_hash}")
             return synapse
 
-        encrypted_data_bytes = load_from_filesystem(filepath)
+        try:
+            encrypted_data_bytes = load_from_filesystem(filepath)
+        except Exception as e:
+            bt.logging.error(f"Error loading file {filepath}: {e}")
+            synapse.axon.status_code = 404
+            synapse.axon.status_message = "File not found"
+            return synapse
 
         # Construct the next commitment hash using previous commitment and hash
         # of the data to prove storage over time
@@ -704,7 +708,14 @@ class miner:
         if filepath == None:
             bt.logging.error(f"No file found for {synapse.data_hash}")
             return synapse
-        encrypted_data_bytes = load_from_filesystem(filepath)
+
+        try:
+            encrypted_data_bytes = load_from_filesystem(filepath)
+        except Exception as e:
+            bt.logging.error(f"Error loading file {filepath}: {e}")
+            synapse.axon.status_code = 404
+            synapse.axon.status_message = "File not found"
+            return synapse
 
         # incorporate a final seed challenge to verify they still have the data at retrieval time
         commitment, proof = compute_subsequent_commitment(
