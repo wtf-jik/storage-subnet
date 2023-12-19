@@ -723,7 +723,7 @@ class miner:
         # Return base64 data
         synapse.data = base64.b64encode(encrypted_data_bytes)
 
-        bt.logging.info(f"returning retrieved data {synapase.data[:24]}...")
+        bt.logging.info(f"returning retrieved data {synapse.data[:24]}...")
         return synapse
 
     def run(self):
