@@ -143,6 +143,7 @@ class miner:
         bt.logging.debug("loading subtensor")
         self.subtensor = bt.subtensor(config=self.config)
         bt.logging.debug(str(self.subtensor))
+        self.current_block = self.subtensor.get_current_block()
 
         # Init wallet.
         bt.logging.debug("loading wallet")
