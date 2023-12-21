@@ -56,21 +56,6 @@ Currently supporting `python>=3.8,<3.11`.
 The Storage CLI provides a user-friendly command-line interface for storing and retrieving data on the Bittensor network. It simplifies the process of data encryption, storage, and retrieval, ensuring security and ease of use. This tool is ideal for users who need to manage data securely on a decentralized network.
 
 
-### Network Stats
-
-You can observe several features of the network in real time (updated every 15 minutes).
-
-Currently available are:
-- total storage (current storage, total possible)
-- miner statistics (store, challenge, retrieve)
-
-You can find them all at the following links:
-
-| Total Storage | Miner Store Stats | Miner Challenge Stats | Miner Retrieve Stats |
-|:----------------:|:-----------------:|:---------------------:|:--------------------:|
-| [![Total Storage](/assets/totalStorage.png)](https://chart-studio.plotly.com/~philanthrope/14/) | [![Miner Store](/assets/store.png)](https://plotly.com/~philanthrope/5/) | [![Miner Challenge](/assets/challenge.png)](https://plotly.com/~philanthrope/7/) | [![Miner Retrieve](/assets/retrieval.png)](https://plotly.com/~philanthrope/9/) |
-
-
 ## Prerequisites
 Before using the Storage CLI, ensure that Bittensor is installed and your wallet (hotkey and coldkey) is properly configured.
 
@@ -364,9 +349,25 @@ sudo npm install pm2 -g
 
 
 ### Running a miner
+You can run a miner in your base environment like so:
+
 ```bash
-python neurons/miner.py --wallet.name <NAME> --wallet.hotkey <HOTKEY>
+python neurons/miner.py --wallet.name <NAME> --wallet.hotkey <HOTKEY> --logging.debug
 ```
+
+However, it is recommended to use a process manager, such as `pm2`. This can be done simply:
+
+```bash
+pm2 start <path-to-script> --interpreter <path-to-python-binary> --name <unique-name> -- <program-args..,>
+```
+
+For example running a miner:
+```bash
+pm2 start /home/user/storage-subnet/neurons/miner.py --interpreter /home/user/miniconda3/envs/sn21/bin/python --name miner -- --netuid 21 --wandb.off --wallet.name default --wallet.hotkey miner  --axon.port 8888 --logging.debug
+```
+
+> Make sure to use absolute paths when executing your pm2 command.
+
 
 #### Options
 
@@ -455,6 +456,11 @@ export BT_COLD_PW_DEFAULT=xxxyyy
 ```
 
 This allows for restarting your process without having to input the wallet password each time.
+
+For example using `pm2`:
+```bash
+BT_COLD_PW_DEFAULT=<YOUR_PW_HERE> pm2 start /home/user/storage-subnet/neurons/validator.py --interpreter /home/user/miniconda3/envs/sn21/bin/python --name validator -- --netuid 21 --logging.debug --wallet.name default --wallet.hotkey validator
+```
 
 #### Options
 
