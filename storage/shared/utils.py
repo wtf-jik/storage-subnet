@@ -102,4 +102,3 @@ def chunk_data(data: bytes, chunksize: int) -> List[bytes]:
     """
     for i in range(0, len(data), chunksize):
         yield data[i : i + chunksize]
-

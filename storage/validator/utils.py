@@ -168,7 +168,7 @@ def ttl_cache(maxsize=128, ttl=10):
 
 
 @ttl_cache(ttl=12)  # Cache TTL of 30 seconds
-def current_block_hash(subtensor):
+def current_block_hash(self):
     """
     Get the current block hash with caching.
 
@@ -178,10 +178,14 @@ def current_block_hash(subtensor):
     Returns:
         str: The current block hash.
     """
-    return subtensor.get_block_hash(subtensor.get_current_block())
+    current_block = self.current_block
+    if current_block == None:
+        current_block = self.subtensor.get_current_block()
+    bt.logging.trace(f"current block in current_block_hash: {current_block}")
+    return self.subtensor.get_block_hash(current_block)
 
 
-def get_block_seed(subtensor):
+def get_block_seed(self):
     """
     Get the block seed for the current block.
 
@@ -191,10 +195,12 @@ def get_block_seed(subtensor):
     Returns:
         int: The block seed.
     """
-    return int(current_block_hash(subtensor), 16)
+    block_hash = current_block_hash(self)
+    bt.logging.trace(f"block hash in get_block_seed: {block_hash}")
+    return int(block_hash, 16)
 
 
-def get_pseudorandom_uids(subtensor, uids, k):
+def get_pseudorandom_uids(self, uids, k):
     """
     Get a list of pseudorandom uids from the given list of uids.
 
@@ -205,7 +211,7 @@ def get_pseudorandom_uids(subtensor, uids, k):
     Returns:
         list: A list of pseudorandom uids.
     """
-    block_seed = get_block_seed(subtensor)
+    block_seed = get_block_seed(self)
     pyrandom.seed(block_seed)
 
     # Ensure k is not larger than the number of uids
@@ -331,7 +337,7 @@ def get_query_miners(self, k=20, exlucde=None):
     muids = get_all_miners(self)
     if exlucde is not None:
         muids = [muid for muid in muids if muid not in exlucde]
-    return get_pseudorandom_uids(self.subtensor, muids, k=k)
+    return get_pseudorandom_uids(self, muids, k=k)
 
 
 def get_query_validators(self, k=3):
@@ -345,7 +351,7 @@ def get_query_validators(self, k=3):
         list: A list of pseudorandomly selected available validator UIDs
     """
     vuids = get_all_validators(self)
-    return get_pseudorandom_uids(self.subtensor, uids=vuids, k=k)
+    return get_pseudorandom_uids(self, uids=vuids, k=k)
 
 
 async def get_available_query_miners(self, k, exclude=None):
@@ -365,7 +371,7 @@ async def get_available_query_miners(self, k, exclude=None):
         for uid in muids
         if not await hotkey_at_capacity(self.metagraph.hotkeys[uid], self.database)
     ]
-    return get_pseudorandom_uids(self.subtensor, muids, k=k)
+    return get_pseudorandom_uids(self, muids, k=k)
 
 
 def get_current_validator_uid_pseudorandom(self):
@@ -375,7 +381,7 @@ def get_current_validator_uid_pseudorandom(self):
     Returns:
         int: A pseudorandomly selected validator UID.
     """
-    block_seed = get_block_seed(self.subtensor)
+    block_seed = get_block_seed(self)
     pyrandom.seed(block_seed)
     vuids = get_query_validators(self)
     return pyrandom.choice(vuids)
@@ -419,7 +425,7 @@ def generate_efficient_combinations(available_uids, R):
     return uid_combinations
 
 
-def assign_combinations_to_hashes_by_block_hash(subtensor, hashes, combinations):
+def assign_combinations_to_hashes_by_block_hash(self, hashes, combinations):
     """
     Assigns combinations of UIDs to each data chunk hash based on a pseudorandom seed derived from the blockchain's current block hash.
 
@@ -439,7 +445,7 @@ def assign_combinations_to_hashes_by_block_hash(subtensor, hashes, combinations)
         raise ValueError(
             "Not enough unique UID combinations for the given redundancy factor and number of hashes."
         )
-    block_seed = get_block_seed(subtensor)
+    block_seed = get_block_seed(self)
     pyrandom.seed(block_seed)
 
     # Shuffle once and then iterate in order for assignment
@@ -558,7 +564,7 @@ def compute_chunk_distribution(
     data_chunks = chunk_data_generator(data, chunk_size)
 
     # Use multiprocessing to process chunks in parallel
-    block_seed = get_block_seed(self.subtensor)
+    block_seed = get_block_seed(self)
 
     # Pre-shuffle the UID combinations
     pyrandom.seed(block_seed)

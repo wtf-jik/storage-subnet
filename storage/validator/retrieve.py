@@ -392,6 +392,7 @@ async def retrieve_broadband(self, full_hash: str):
                         chunks[i] = base64.b64decode(response.data)
                         bt.logging.debug(f"chunk {i} | {chunks[i][:100]}")
                 else:
+                    uid = self.metagraph.hotkeys.index(response.axon.hotkey)
                     bt.logging.error(
                         f"Failed to verify store commitment from UID: {uid}"
                     )

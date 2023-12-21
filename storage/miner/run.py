@@ -70,23 +70,24 @@ def run(self):
             start_epoch = time.time()
 
             # --- Wait until next epoch.
-            current_block = self.subtensor.get_current_block()
+            self.current_block = self.subtensor.get_current_block()
 
             while (
-                current_block - self.last_epoch_block
+                self.current_block - self.last_epoch_block
                 < self.config.miner.set_weights_epoch_length
             ):
                 # --- Wait for next bloc.
                 time.sleep(1)
-                current_block = self.subtensor.get_current_block()
-                bt.logging.info(f"Miner running at block {current_block}...")                
- 
+                self.current_block = self.subtensor.get_current_block()
+                bt.logging.info(f"Miner running at block {current_block}...")
+
                 # --- Check if we should exit.
                 if self.should_exit:
                     break
 
             # --- Update the metagraph with the latest network state.
             self.last_epoch_block = self.subtensor.get_current_block()
+            self.current_block = self.last_epoch_block
 
             self.metagraph = self.subtensor.metagraph(
                 netuid=self.config.netuid,
