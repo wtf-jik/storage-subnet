@@ -40,6 +40,7 @@ Currently supporting `python>=3.8,<3.11`.
    - [Storage Phase](#storage-phase)
    - [Challenge Phase](#challenge-phase)
    - [Retrieval Phase](#retrieval-phase)
+1. [Reward System](#reward-system)
 1. [Epoch UID Selection](#epoch-uid-selection)
 1. [Installation](#installation)
    - [Install Redis](#install-redis)
@@ -272,6 +273,104 @@ In each phase, cryptographic primitives ensure data integrity and confidentialit
 In each phase, cryptographic primitives like hashing, commitment schemes (e.g., Elliptic Curve Cryptography and Pedersen commitments), and data structures like Merkle trees are employed to ensure the integrity, confidentiality, and availability of the data. The use of seeds and randomness in commitments adds an additional layer of security and ensures that each instance of data storage and retrieval is unique and verifiable. See [here](https://kndrck.co/posts/efficient-merkletrees-zk-proofs/) for more information.
 
 
+## Reward System
+
+In FileTAO's decentralized storage system, optimal behavior is crucial for the overall health and efficiency of the network. Miners play a vital role in maintaining this ecosystem, and their actions directly impact their rewards and standing within the subnet. We have implemented a tier-based reward system to encourage proper behavior, successful challenge completions, and consistent performance.
+
+Failing to pass either challenge or retrieval verifications incur negative rewards. This is doubly destructive, as rolling statistics are continuously logged to periodically compute which tier a given miner hotkey belongs to. When a miner achieves the threshold for the next tier, the rewards that miner recieves proportionally increase. Conversely, when a miner drops below the threshold of the previous tier, that miner's rewards are slashed such that they recieve rewards proportionally to the immediately lower tier.
+
+
+#### Tier System:
+The tier system classifies miners into five distinct categories, each with specific requirements and storage limits. These tiers are designed to reward miners based on their performance, reliability, and the total volume of data they can store.
+
+1. 🎇 **Super Saiyan Tier:** 
+   - **Storage Limit:** 1 Exabyte (EB)
+   - **Store Success Rate:** 99.9% (1/1000 chance of failure)
+   - **Retrieval Success Rate:** 99.9%
+   - **Challenge Success Rate:** 99.9%
+   - **Reward Factor:** 2.0 (200% rewards)
+
+2. 💎 **Diamond Tier:**
+   - **Storage Limit:** 1 Petabyte (PB)
+   - **Store Success Rate:** 99% (1/100 chance of failure)
+   - **Retrieval Success Rate:** 99%
+   - **Challenge Success Rate:** 99%
+   - **Reward Factor:** 1.0 (100% rewards)
+
+3. 🥇 **Gold Tier:**
+   - **Storage Limit:** 100 Terabytes (TB)
+   - **Store Success Rate:** 97.5% (1/50 chance of failure)
+   - **Retrieval Success Rate:** 97.5%
+   - **Challenge Success Rate:** 97.5%
+   - **Reward Factor:** 0.888 (88.8% rewards)
+
+4. 🥈 **Silver Tier:**
+   - **Storage Limit:** 10 Terabytes (TB)
+   - **Store Success Rate:** 95% (1/20 chance of failure)
+   - **Retrieval Success Rate:** 95%
+   - **Challenge Success Rate:** 95%
+   - **Reward Factor:** 0.555 (55.5% rewards)
+
+5. 🥉 **Bronze Tier:**
+   - **Storage Limit:** 1 Terabyte (TB)
+   - **Store Success Rate:** Not specifically defined for this tier
+   - **Retrieval Success Rate:** Not specifically defined for this tier
+   - **Challenge Success Rate:** Not specifically defined for this tier
+   - **Reward Factor:** 0.333 (33.3% rewards)
+
+#### Importance of Tier System:
+- **Encourages High Performance:** Higher tiers reward miners with greater benefits, motivating them to maintain high success rates.
+- **Enhances Network Reliability:** The tier system ensures that only the most reliable and efficient miners handle significant volumes of data, enhancing the overall reliability of the network.
+- **Fair Reward Distribution:** The reward factors are proportional to the miners' tier, ensuring a fair distribution of rewards based on performance.
+
+#### Maintaining and Advancing Tiers:
+- To advance to a higher tier, miners must consistently achieve the required success rates in their operations.
+- Periodic evaluations are conducted to ensure miners maintain the necessary performance standards to stay in their respective tiers.
+
+#### Conclusion:
+The tier system in FileTAO's decentralized storage network plays a pivotal role in ensuring the network's efficiency and reliability. By setting clear performance benchmarks and rewarding miners accordingly, the system fosters a competitive yet fair environment. This encourages continuous improvement among miners, ultimately leading to a robust and trustworthy decentralized storage solution.
+
+
+**Why Optimal Behavior Matters:**
+1. **Reliability:** Miners who consistently store, retrieve, and pass challenges with high success rates ensure the reliability and integrity of the network.
+2. **Trust:** High-performing miners build trust in the network, attracting more users and increasing the overall value of the system.
+3. **Efficiency:** Optimal behavior leads to a more efficient network, reducing the likelihood of data loss and ensuring fast, reliable access to stored information.
+
+**Tier-Based Reward System:**
+- **Tiers:** We classify miners into four tiers – Diamond, Gold, Silver, and Bronze – based on their performance metrics.
+- **Performance Metrics:** These include the success rate in storage, retrieval, and challenge tasks, as well as the total number of successful operations.
+- **Higher Rewards for Higher Tiers:** Miners in higher tiers receive a greater proportion of the rewards, reflecting their superior performance and contribution to the network.
+
+**Moving Up Tiers:**
+- To ascend to a higher tier, a miner must maintain high success rates and achieve a set number of total successes.
+- This progression system incentivizes continuous improvement and excellence in mining operations.
+
+**Graphical Representation:**
+- The graph below illustrates how rewards increase as miners advance through the tiers. It visually represents the potential growth in earnings as miners optimize their operations and maintain high standards of performance.
+
+![bond-curve](assets/bonding.jpg)
+
+The tier-based reward system is designed to promote optimal behavior among miners, ensuring the health and efficiency of the decentralized storage network. By aligning miners' interests with those of the network, we create a robust, trustworthy, and efficient storage solution.
+
+### Speed and Reliability in Decentralized Storage Mining
+
+In the context of FileTAO's decentralized storage system, speed and reliability are critical factors that significantly influence the performance and reputation of miners. These factors not only affect the efficiency of data storage and retrieval but also play a crucial role in the overall user experience and the robustness of the network.
+
+#### Importance of Speed:
+1. **Quick Data Access:** Fast response times in data storage and retrieval operations are essential for a seamless user experience. Miners with quicker response times enhance the network's ability to serve data efficiently.
+2. **Improved Network Performance:** Speedy processing of tasks contributes to the overall performance of the network, reducing bottlenecks and ensuring smooth data flow.
+3. **Advantage in Reward Scaling:** The implemented reward scaling mechanisms favor faster response times. Miners who consistently provide quick services are likely to receive higher rewards due to better performance metrics.
+
+#### Importance of Reliability:
+1. **Data Integrity:** Reliable storage and retrieval ensure that data remains intact and accessible when needed. This is vital for maintaining the trust of users who rely on the network for data storage.
+2. **Challenge Success Rate:** A high success rate in passing challenges signifies a miner's reliability. It shows their commitment to maintaining the network's integrity and their capability to meet the required standards.
+3. **Tier Advancement and Stability:** Reliable miners have a better chance of advancing to higher tiers and maintaining their position. This stability is rewarded with increased earning potential and recognition within the network.
+
+#### Reward Scaling Mechanisms:
+1. **Sigmoid and Min-Max Scaling:** The reward scaling is based on response times, using either an adjusted sigmoid function or min-max normalization. This approach rewards faster and more reliable miners, aligning their incentives with the network's goals.
+2. **Tier-Based Reward Factors:** Each tier has an associated reward factor, which determines the proportion of rewards received by the miner. Higher tiers, achieved through consistent performance, offer greater rewards.
+
+
 ## Epoch UID selection
 Miners are chosen pseudorandomly using the current block hash as a random seed. This allows for public verification of which miners are selected for each challenge round (3 blocks).
 
@@ -409,34 +508,6 @@ pm2 start /home/user/storage-subnet/neurons/miner.py --interpreter /home/user/mi
 - `--wandb.notes`: Notes to add to the WandB run. Default: "".
 
 These options allow you to configure the miner's behavior, database connections, blacklist/whitelist settings, priority handling, and integration with monitoring tools like WandB. Adjust these settings based on your mining setup and requirements.
-
-
-#### Optimal Behavior and Reward System in Decentralized Storage Mining
-
-In FileTAO's decentralized storage system, optimal behavior is crucial for the overall health and efficiency of the network. Miners play a vital role in maintaining this ecosystem, and their actions directly impact their rewards and standing within the subnet. We have implemented a tier-based reward system to encourage proper behavior, successful challenge completions, and consistent performance.
-
-Failing to pass either challenge or retrieval verifications incur negative rewards. This is doubly destructive, as rolling statistics are continuously logged to periodically compute which tier a given miner hotkey belongs to. When a miner achieves the threshold for the next tier, the rewards that miner recieves proportionally increase. Conversely, when a miner drops below the threshold of the previous tier, that miner's rewards are slashed such that they recieve rewards proportionally to the immediately lower tier.
-
-**Why Optimal Behavior Matters:**
-1. **Reliability:** Miners who consistently store, retrieve, and pass challenges with high success rates ensure the reliability and integrity of the network.
-2. **Trust:** High-performing miners build trust in the network, attracting more users and increasing the overall value of the system.
-3. **Efficiency:** Optimal behavior leads to a more efficient network, reducing the likelihood of data loss and ensuring fast, reliable access to stored information.
-
-**Tier-Based Reward System:**
-- **Tiers:** We classify miners into four tiers – Diamond, Gold, Silver, and Bronze – based on their performance metrics.
-- **Performance Metrics:** These include the success rate in storage, retrieval, and challenge tasks, as well as the total number of successful operations.
-- **Higher Rewards for Higher Tiers:** Miners in higher tiers receive a greater proportion of the rewards, reflecting their superior performance and contribution to the network.
-
-**Moving Up Tiers:**
-- To ascend to a higher tier, a miner must maintain high success rates and achieve a set number of total successes.
-- This progression system incentivizes continuous improvement and excellence in mining operations.
-
-**Graphical Representation:**
-- The graph below illustrates how rewards increase as miners advance through the tiers. It visually represents the potential growth in earnings as miners optimize their operations and maintain high standards of performance.
-
-![bond-curve](assets/bonding.jpg)
-
-The tier-based reward system is designed to promote optimal behavior among miners, ensuring the health and efficiency of the decentralized storage network. By aligning miners' interests with those of the network, we create a robust, trustworthy, and efficient storage solution.
 
 
 ### Running a validator
