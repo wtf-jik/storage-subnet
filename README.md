@@ -288,6 +288,7 @@ The tier system classifies miners into five distinct categories, each with speci
    - **Store Success Rate:** 99.9% (1/1000 chance of failure)
    - **Retrieval Success Rate:** 99.9%
    - **Challenge Success Rate:** 99.9%
+   - **Minimum Successes Required:** 100,000
    - **Reward Factor:** 2.0 (200% rewards)
 
 2. 💎 **Diamond Tier:**
@@ -295,6 +296,7 @@ The tier system classifies miners into five distinct categories, each with speci
    - **Store Success Rate:** 99% (1/100 chance of failure)
    - **Retrieval Success Rate:** 99%
    - **Challenge Success Rate:** 99%
+   - **Minimum Successes Required:** 50,000
    - **Reward Factor:** 1.0 (100% rewards)
 
 3. 🥇 **Gold Tier:**
@@ -302,6 +304,7 @@ The tier system classifies miners into five distinct categories, each with speci
    - **Store Success Rate:** 97.5% (1/50 chance of failure)
    - **Retrieval Success Rate:** 97.5%
    - **Challenge Success Rate:** 97.5%
+   - **Minimum Successes Required:** 5,000
    - **Reward Factor:** 0.888 (88.8% rewards)
 
 4. 🥈 **Silver Tier:**
@@ -309,6 +312,7 @@ The tier system classifies miners into five distinct categories, each with speci
    - **Store Success Rate:** 95% (1/20 chance of failure)
    - **Retrieval Success Rate:** 95%
    - **Challenge Success Rate:** 95%
+   - **Minimum Successes Required:** 1,000
    - **Reward Factor:** 0.555 (55.5% rewards)
 
 5. 🥉 **Bronze Tier:**
@@ -316,6 +320,7 @@ The tier system classifies miners into five distinct categories, each with speci
    - **Store Success Rate:** Not specifically defined for this tier
    - **Retrieval Success Rate:** Not specifically defined for this tier
    - **Challenge Success Rate:** Not specifically defined for this tier
+   - **Minimum Successes Required:** Not specifically defined for this tier
    - **Reward Factor:** 0.333 (33.3% rewards)
 
 #### Importance of Tier System:
