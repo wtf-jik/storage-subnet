@@ -522,20 +522,11 @@ python neurons/validator.py --wallet.name <NAME> --wallet.hotkey <HOTKEY>
 
 > Note: If you are running a validator, you should also be running an API node. This increases resilience and allows greater volumes of data to be stored efficiently on the network.
 
-Ensure that your wallet password is set as an environment variable with prefix `BT_COLD_PW_` so bittensor can autmatically inject this to unlock the coldkey for proper operation.
+A dummy wallet is automatically configured and used for all encryption on the network as a validator. The registered coldkey is not exposed. 
 
+Run a validator using `pm2`:
 ```bash
-export BT_COLD_PW_<MYWALLETNAME>=xxxyyy
-
-# e.g.
-export BT_COLD_PW_DEFAULT=xxxyyy
-```
-
-This allows for restarting your process without having to input the wallet password each time.
-
-For example using `pm2`:
-```bash
-BT_COLD_PW_DEFAULT=<YOUR_PW_HERE> pm2 start /home/user/storage-subnet/neurons/validator.py --interpreter /home/user/miniconda3/envs/sn21/bin/python --name validator -- --netuid 21 --logging.debug --wallet.name default --wallet.hotkey validator
+pm2 start /home/user/storage-subnet/neurons/validator.py --interpreter /home/user/miniconda3/envs/sn21/bin/python --name validator -- --netuid 21 --logging.debug --wallet.name default --wallet.hotkey validator
 ```
 
 #### Options
@@ -548,7 +539,7 @@ BT_COLD_PW_DEFAULT=<YOUR_PW_HERE> pm2 start /home/user/storage-subnet/neurons/va
 - `--neuron.override_chunk_size`: Overrides the random chunk size for splitting data into challenges. Default: 0 (no override).
 - `--neuron.store_redundancy`: The number of miners to store each piece of data on. Default: 3.
 - `--neuron.store_step_length`: Steps before a random store epoch is complete. Default: 5.
-- `--neuron.challenge_sample_size`: The number of miners to challenge at a time, targeting ~90 miners per epoch. Default: 20.
+- `--neuron.challenge_sample_size`: The number of miners to challenge at a time, targeting ~90 miners per epoch. Default: 10.
 - `--neuron.retrieve_step_length`: Steps before a random retrieve epoch is complete. Default: 5.
 - `--neuron.tier_update_step_length`: Steps before a tier update epoch is complete. Default: 100.
 - `--neuron.set_weights_epoch_length`: Blocks until the miner sets weights on chain. Default: 200.
