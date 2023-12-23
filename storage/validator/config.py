@@ -134,7 +134,7 @@ def add_args(cls, parser):
     parser.add_argument(
         "--neuron.challenge_sample_size",
         type=int,
-        default=20,
+        default=10,
         help="Number of miners to challenge at a time. Target is ~90 miners per epoch.",
     )
     parser.add_argument(
@@ -148,6 +148,18 @@ def add_args(cls, parser):
         type=int,
         default=100,
         help="Number of steps before computing and logging all stats.",
+    )
+    parser.add_argument(
+        "--neuron.monitor_step_length",
+        type=int,
+        default=5,
+        help="Number of steps before calling monitor for down uids.",
+    )
+    parser.add_argument(
+        "--neuron.monitor_sample_size",
+        type=int,
+        default=20,
+        help="Number of miners to monitor each interval.",
     )
     parser.add_argument(
         "--neuron.max_failed_pings",
@@ -207,7 +219,7 @@ def add_args(cls, parser):
         "--neuron.challenge_timeout",
         type=float,
         help="Challenge data query timeout.",
-        default=20,
+        default=30,
     )
     parser.add_argument(
         "--neuron.retrieve_timeout",
@@ -234,12 +246,6 @@ def add_args(cls, parser):
         default=3,
     )
     parser.add_argument(
-        "--neuron.monitor_step_length",
-        type=int,
-        help="Number of steps before calling monitor for down uids.",
-        default=5,
-    )
-    parser.add_argument(
         "--neuron.events_retention_size",
         type=str,
         help="Events retention size.",
@@ -255,7 +261,7 @@ def add_args(cls, parser):
         "--neuron.vpermit_tao_limit",
         type=int,
         help="The maximum number of TAO allowed to query a validator with a vpermit.",
-        default=2000,
+        default=500,
     )
     parser.add_argument(
         "--neuron.verbose",
@@ -346,18 +352,6 @@ def add_args(cls, parser):
     parser.add_argument(
         "--mock", action="store_true", help="Mock all items.", default=False
     )
-    parser.add_argument(
-        "--neuron.nsfw_off",
-        action="store_true",
-        help="Dont apply the nsfw reward model",
-        default=False,
-    )
-    parser.add_argument(
-        "--neuron.mock_dendrite_pool",
-        action="store_true",
-        help="Dont download the dendrite pool.",
-        default=False,
-    )
 
     # API specific
     parser.add_argument(
@@ -376,7 +370,7 @@ def add_args(cls, parser):
         "--api.ping_timeout",
         type=int,
         help="Ping data query timeout.",
-        default=2,
+        default=5,
     )
     parser.add_argument(
         "--api.whitelisted_hotkeys",
@@ -389,6 +383,26 @@ def add_args(cls, parser):
         "--api.debug",
         action="store_true",
         help="If set, we whitelist by default to test easily.",
+    )
+
+    # Encryption wallet
+    parser.add_argument(
+        "--encryption.wallet_name",
+        type=str,
+        help="The name of the wallet to use for encryption.",
+        default="core_storage_coldkey",
+    )
+    parser.add_argument(
+        "--encryption.wallet_hotkey",
+        type=str,
+        help="The hotkey name of the wallet to use for encryption.",
+        default="core_storage_hotkey",
+    )
+    parser.add_argument(
+        "--encryption.password",
+        type=str,
+        help="The password of the wallet to use for encryption.",
+        default="dummy_password",
     )
 
 

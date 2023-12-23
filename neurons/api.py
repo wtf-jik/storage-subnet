@@ -29,6 +29,7 @@ import aioredis
 import traceback
 import websocket
 import bittensor as bt
+import threading
 
 from storage import protocol
 from storage.shared.ecc import hash_data
@@ -43,6 +44,14 @@ from storage.validator.network import (
     compute_and_ping_chunks,
     ping_uids,
 )
+
+from storage.validator.database import retrieve_encryption_payload
+
+from storage.validator.encryption import decrypt_data_with_private_key
+
+
+def MockDendrite():
+    pass
 
 
 class neuron:
@@ -93,11 +102,11 @@ class neuron:
         )
         bt.logging.debug(str(self.subtensor))
 
-        # Init wallet.
+        # Init validator wallet.
         bt.logging.debug("loading wallet")
         self.wallet = bt.wallet(config=self.config)
-        self.wallet.coldkey  # Unlock for testing
         self.wallet.create_if_non_existent()
+
         if not self.config.wallet._mock:
             if not self.subtensor.is_hotkey_registered_on_subnet(
                 hotkey_ss58=self.wallet.hotkey.ss58_address, netuid=self.config.netuid
@@ -107,6 +116,14 @@ class neuron:
                 )
 
         bt.logging.debug(f"wallet: {str(self.wallet)}")
+
+        # Setup dummy wallet for encryption purposes. No password needed.
+        self.encryption_wallet = bt.wallet(
+            name=self.config.neuron.encryption_wallet_name,
+            hotkey=self.config.neuron.encryption_hotkey,
+        )
+        self.encryption_wallet.create_if_non_existent(coldkey_use_password=False)
+        self.encryption_wallet.coldkey  # Unlock the coldkey.
 
         # Init metagraph.
         bt.logging.debug("loading metagraph")
@@ -184,7 +201,7 @@ class neuron:
         self.is_running: bool = False
         self.thread: threading.Thread = None
         self.lock = asyncio.Lock()
-        self.request_timestamps: Dict = {}
+        self.request_timestamps: typing.Dict = {}
 
         self.step = 0
 
@@ -256,7 +273,7 @@ class neuron:
             else decoded_data
         )
         validator_encrypted_data, validator_encryption_payload = encrypt_data(
-            decoded_data, self.wallet
+            decoded_data, self.encryption_wallet
         )
 
         # Hash the original data to avoid data confusion
@@ -289,14 +306,15 @@ class neuron:
         if synapse.dendrite.hotkey in self.top_n_validators:
             return False, f"Hotkey {synapse.dendrite.hotkey} in top n% stake."
 
-        # Otherwise, reject.
+        # If debug mode, whitelist everything (NOT RECOMMENDED)
         if self.config.api.debug:
             return False, "Debug all whitelisted"
-        return False, ""
-        # return (
-        #     True,
-        #     f"Hotkey {synapse.dendrite.hotkey} not whitelisted or in top n% stake.",
-        # )
+
+        # Otherwise, reject.
+        return (
+            True,
+            f"Hotkey {synapse.dendrite.hotkey} not whitelisted or in top n% stake.",
+        )
 
     async def store_priority(self, synapse: protocol.StoreUser) -> float:
         caller_uid = self.metagraph.hotkeys.index(
@@ -343,17 +361,19 @@ class neuron:
             f"validator_encryption_payload: {validator_encryption_payload}"
         )
         decrypted_data = decrypt_data_with_private_key(
-            data,
+            validator_encrypted_data,
             bytes(json.dumps(validator_encryption_payload), "utf-8"),
-            bytes(self.wallet.coldkey.private_key.hex(), "utf-8"),
+            bytes(self.encryption_wallet.coldkey.private_key.hex(), "utf-8"),
         )
         bt.logging.debug(f"decrypted_data: {decrypted_data[:100]}")
 
-        bt.logging.debug(f"returning user data: {encrypted_data[:100]}")
-        bt.logging.debug(f"returning user payload: {encryption_payload}")
-        synapse.encrypted_data = base64.b64encode(encrypted_data)
+        bt.logging.debug(f"returning user data: {decrypted_data[:100]}")
+        bt.logging.debug(f"returning user payload: {user_encryption_payload}")
+        synapse.encrypted_data = base64.b64encode(user_encryption_payload)
         synapse.encryption_payload = (
-            json.dumps(payload) if isinstance(payload, dict) else payload
+            json.dumps(user_encryption_payload)
+            if isinstance(user_encryption_payload, dict)
+            else user_encryption_payload
         )
         return synapse
 
@@ -368,14 +388,15 @@ class neuron:
         if synapse.dendrite.hotkey in self.top_n_validators:
             return False, f"Hotkey {synapse.dendrite.hotkey} in top n% stake."
 
-        # Otherwise, reject.
+        # If debug mode, whitelist everything (NOT RECOMMENDED)
         if self.config.api.debug:
             return False, "Debug all whitelisted."
-        return False, ""
-        # return (
-        #     True,
-        #     f"Hotkey {synapse.dendrite.hotkey} not whitelisted or in top n% stake.",
-        # )
+
+        # Otherwise, reject.
+        return (
+            True,
+            f"Hotkey {synapse.dendrite.hotkey} not whitelisted or in top n% stake.",
+        )
 
     async def retrieve_priority(self, synapse: protocol.RetrieveUser) -> float:
         caller_uid = self.metagraph.hotkeys.index(

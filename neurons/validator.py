@@ -50,6 +50,11 @@ from storage.validator.weights import (
 from storage.validator.database import purge_challenges_for_all_hotkeys
 from storage.validator.forward import forward
 from storage.validator.rebalance import rebalance_data
+from storage.validator.encryption import setup_encryption_wallet
+
+
+def MockDendrite():
+    pass
 
 
 class neuron:
@@ -103,11 +108,11 @@ class neuron:
         )
         bt.logging.debug(str(self.subtensor))
 
-        # Init wallet.
+        # Init validator wallet.
         bt.logging.debug("loading wallet")
         self.wallet = bt.wallet(config=self.config)
-        self.wallet.coldkey  # Unlock for testing
         self.wallet.create_if_non_existent()
+
         if not self.config.wallet._mock:
             if not self.subtensor.is_hotkey_registered_on_subnet(
                 hotkey_ss58=self.wallet.hotkey.ss58_address, netuid=self.config.netuid
@@ -117,6 +122,16 @@ class neuron:
                 )
 
         bt.logging.debug(f"wallet: {str(self.wallet)}")
+
+        # Setup dummy wallet for encryption purposes. No password needed.
+        self.encryption_wallet = setup_encryption_wallet(
+            wallet_name=self.config.encryption.wallet_name,
+            wallet_hotkey=self.config.encryption.hotkey,
+            password=self.config.encryption.password,
+        )
+        self.encryption_wallet.create_if_non_existent(coldkey_use_password=False)
+        self.encryption_wallet.coldkey  # Unlock the coldkey.
+        bt.logging.info(f"loading encryption wallet {self.encryption_wallet}")
 
         # Init metagraph.
         bt.logging.debug("loading metagraph")
