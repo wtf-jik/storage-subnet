@@ -235,9 +235,9 @@ async def challenge_data(self):
         return event
 
     # Remove UIDs without hashes (don't punish new miners that have no challenges yet)
+    uids, responses = _filter_verified_responses(uids, responses)
     bt.logging.info(f"WIP uids: {uids}")
     bt.logging.info(f"WIP responses: {responses}")
-    uids, responses = _filter_verified_responses(uids, responses)
     bt.logging.debug(
         f"challenge_data() full rewards: {rewards} | uids {uids} | uids to remove {remove_reward_idxs}"
     )
