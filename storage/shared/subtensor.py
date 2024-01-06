@@ -1,3 +1,4 @@
+import time
 from functools import lru_cache, update_wrapper
 from typing import Callable, Any
 
