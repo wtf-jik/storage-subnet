@@ -237,13 +237,7 @@ async def challenge_data(self):
     # Remove UIDs without hashes (don't punish new miners that have no challenges yet)
     bt.logging.info(f"WIP uids: {uids}")
     bt.logging.info(f"WIP responses: {responses}")
-    uids, responses = zip(
-        *[
-            (uid, response[0])
-            for (uid, (verified, response)) in zip(uids, responses)
-            if verified != None
-        ]
-    )
+    uids, responses = _filter_verified_responses(uids, responses)
     bt.logging.debug(
         f"challenge_data() full rewards: {rewards} | uids {uids} | uids to remove {remove_reward_idxs}"
     )
@@ -267,3 +261,19 @@ async def challenge_data(self):
         event.best_hotkey = self.metagraph.hotkeys[event.best_uid]
 
     return event
+
+
+def _filter_verified_responses(uids, responses):
+    not_none_responses = [
+        (uid, response[0])
+        for (uid, (verified, response)) in zip(uids, responses)
+        if verified != None
+    ]
+
+    if len(not_none_responses) == 0:
+        return (), ()
+
+    uids, responses = zip(
+        *not_none_responses
+    )
+    return uids, responses
