@@ -31,6 +31,7 @@ from traceback import print_exception
 
 from storage import protocol
 from storage.shared.subtensor import get_current_block
+from storage.shared.weights import should_set_weights
 from storage.validator.utils import get_current_validtor_uid_round_robin
 from storage.validator.config import config, check_config, add_args
 from storage.validator.state import (
@@ -44,8 +45,7 @@ from storage.validator.state import (
     log_event,
 )
 from storage.validator.weights import (
-    should_set_weights,
-    set_weights,
+    set_weights_for_validator,
 )
 from storage.validator.database import purge_challenges_for_all_hotkeys
 from storage.validator.forward import forward
@@ -294,9 +294,26 @@ class neuron:
 
                 # Set the weights on chain.
                 bt.logging.info(f"Checking if should set weights")
-                if should_set_weights(self):
+                if should_set_weights(
+                    get_current_block(self.subtensor),
+                    self.prev_step_block,
+                    self.config.neuron.set_weights_epoch_length,
+                    self.config.neuron.disable_set_weights
+                ):
                     bt.logging.info(f"Setting weights {self.moving_averaged_scores}")
-                    set_weights(self)
+                    hyperparameters = self.subtensor.get_subnet_hyperparameters(
+                        self.config.netuid, self.current_block
+                    )
+                    tempo = hyperparameters.tempo
+                    set_weights_for_validator(
+                        subtensor=self.subtensor,
+                        wallet=self.wallet,
+                        metagraph=self.metagraph,
+                        netuid=self.config.netuid,
+                        moving_averaged_scores=self.moving_averaged_scores,
+                        wandb_on=self.config.wandb.on,
+                        tempo=tempo,
+                    )
                     save_state(self)
 
                 # Rollover wandb to a new run.

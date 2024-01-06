@@ -6,7 +6,6 @@ from storage.validator.state import (
 )
 
 
-
 class TestValidatorState(TestCase):
     @parameterized.expand(
         [
