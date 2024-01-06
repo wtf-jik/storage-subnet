@@ -23,7 +23,6 @@ import copy
 import math
 import hashlib as rpccheckhealth
 
-from math import floor
 from loguru import logger
 from dataclasses import asdict
 from typing import Callable, Any
