@@ -21,8 +21,8 @@
 import wandb
 import torch
 import bittensor as bt
-from storage.validator.state import ttl_get_block
 from storage import __spec_version__ as spec_version
+from storage.shared.subtensor import get_current_block
 
 
 def should_set_weights(self) -> bool:
@@ -30,7 +30,7 @@ def should_set_weights(self) -> bool:
     if self.config.neuron.disable_set_weights:
         return False
     return (
-        ttl_get_block(self) % self.config.neuron.set_weights_epoch_length
+        get_current_block(self.subtensor) % self.config.neuron.set_weights_epoch_length
         < self.prev_step_block % self.config.neuron.set_weights_epoch_length
     )
 

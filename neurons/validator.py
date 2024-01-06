@@ -30,6 +30,7 @@ from pprint import pformat
 from traceback import print_exception
 
 from storage import protocol
+from storage.shared.subtensor import get_current_block
 from storage.validator.utils import get_current_validtor_uid_round_robin
 from storage.validator.config import config, check_config, add_args
 from storage.validator.state import (
@@ -40,7 +41,6 @@ from storage.validator.state import (
     load_state,
     save_state,
     init_wandb,
-    ttl_get_block,
     log_event,
 )
 from storage.validator.weights import (
@@ -186,7 +186,7 @@ class neuron:
         if self.config.neuron.challenge_sample_size == 0:
             self.config.neuron.challenge_sample_size = self.metagraph.n
 
-        self.prev_step_block = ttl_get_block(self)
+        self.prev_step_block = get_current_block(self.subtensor)
         self.step = 0
 
         # Start with 0 monitor pings
@@ -264,7 +264,7 @@ class neuron:
                         f"Validator is not registered - hotkey {self.wallet.hotkey.ss58_address} not in metagraph"
                     )
 
-                bt.logging.info(f"step({self.step}) block({ttl_get_block( self )})")
+                bt.logging.info(f"step({self.step}) block({get_current_block(self.subtensor)})")
 
                 # Run multiple forwards.
                 async def run_forward():
@@ -278,7 +278,17 @@ class neuron:
 
                 # Resync the network state
                 bt.logging.info("Checking if should checkpoint")
-                if should_checkpoint(self):
+                current_block = get_current_block(self.subtensor)
+                should_checkpoint_validator = should_checkpoint(
+                    current_block,
+                    self.prev_step_block,
+                    self.config.neuron.checkpoint_block_length
+                ):
+                bt.logging.debug(
+                    f"should_checkpoint() params: (current block) {current_block} (prev block) {self.prev_step_block} (checkpoint_block_length) {self.prev_step_block}\n"
+                    f"should checkpoint ? {should_checkpoint_validator}"
+                )
+                if should_checkpoint_validator:
                     bt.logging.info(f"Checkpointing...")
                     checkpoint(self)
 
@@ -294,7 +304,7 @@ class neuron:
                     bt.logging.info(f"Reinitializing wandb")
                     reinit_wandb(self)
 
-                self.prev_step_block = ttl_get_block(self)
+                self.prev_step_block = get_current_block(self.subtensor)
                 if self.config.neuron.verbose:
                     bt.logging.debug(f"block at end of step: {self.prev_step_block}")
                     bt.logging.debug(f"Step took {time.time() - start_epoch} seconds")
