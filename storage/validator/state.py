@@ -37,12 +37,6 @@ import bittensor as bt
 
 
 
-def _ttl_hash_gen(seconds: int):
-    start_time = time.time()
-    while True:
-        yield floor((time.time() - start_time) / seconds)
-
-
 def should_reinit_wandb(self):
     # Check if wandb run needs to be rolled over.
     return (

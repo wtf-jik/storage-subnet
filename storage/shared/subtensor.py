@@ -1,4 +1,11 @@
 from functools import lru_cache, update_wrapper
+from typing import Callable, Any
+
+
+def _ttl_hash_gen(seconds: int):
+    start_time = time.time()
+    while True:
+        yield floor((time.time() - start_time) / seconds)
 
 
 # LRU Cache with TTL
