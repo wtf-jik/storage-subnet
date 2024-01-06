@@ -33,4 +33,4 @@ def ttl_cache(maxsize: int = 128, typed: bool = False, ttl: int = -1):
 # 12 seconds updating block.
 @ttl_cache(maxsize=1, ttl=12)
 def get_current_block(subtensor) -> int:
-    subtensor.get_current_block()
+    return subtensor.get_current_block()
