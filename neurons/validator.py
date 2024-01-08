@@ -285,7 +285,7 @@ class neuron:
                     self.config.neuron.checkpoint_block_length
                 )
                 bt.logging.debug(
-                    f"should_checkpoint() params: (current block) {current_block} (prev block) {self.prev_step_block} (checkpoint_block_length) {self.prev_step_block}\n"
+                    f"should_checkpoint() params: (current block) {current_block} (prev block) {self.prev_step_block} (checkpoint_block_length) {self.config.neuron.checkpoint_block_length}\n"
                     f"should checkpoint ? {should_checkpoint_validator}"
                 )
                 if should_checkpoint_validator:
