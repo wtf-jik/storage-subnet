@@ -71,16 +71,27 @@ def set_weights_for_miner(
     version_key = 1
 
     # --- Set weights.
-    return set_weights(
-        subtensor=subtensor,
-        wallet=wallet,
-        netuid=netuid,
-        uids=uids,
-        weights=chain_weights,
-        metagraph=metagraph,
-        wandb_on=wandb_on,
-        tempo=tempo,
-        wait_for_inclusion=wait_for_inclusion,
-        wait_for_finalization=wait_for_finalization,
-        version_key=version_key,
-    )
+    last_updated = metagraph.last_update[uid].item()
+    current_block = subtensor.get_current_block()
+
+    if not should_wait_to_set_weights(current_block, last_updated, tempo):
+        success = set_weights(
+            subtensor=subtensor,
+            wallet=wallet,
+            netuid=netuid,
+            uids=uids,
+            weights=chain_weights,
+            wandb_on=wandb_on,
+            wait_for_inclusion=wait_for_inclusion,
+            wait_for_finalization=wait_for_finalization,
+            version_key=version_key,
+        )
+        if wandb_on:
+            wandb.log({"set_weights": 1})
+
+        return success
+    else:
+        bt_logging.info(
+            f"Not setting weights because we did it {current_block - last_updated} blocks ago. Last updated: {last_updated}, Current Block: {current_block}"
+        )
+        return False

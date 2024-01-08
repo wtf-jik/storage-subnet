@@ -21,10 +21,8 @@ def set_weights(
     netuid: int,
     uids: "torch.Tensor",
     weights: "torch.Tensor",
-    metagraph: "bt.metagraph",
     version_key: int,
     wandb_on: bool = False,
-    tempo: int = 360,
     wait_for_inclusion: bool = False,
     wait_for_finalization: bool = False,
 ) -> bool:
@@ -62,28 +60,19 @@ def set_weights(
     """
     try:
         # --- Set weights.
-        last_updated = metagraph.last_update[uid].item()
-        current_block = subtensor.get_current_block()
+        success = subtensor.set_weights(
+            wallet=wallet,
+            netuid=netuid,
+            uids=uids,
+            weights=weights,
+            wait_for_inclusion=wait_for_inclusion,
+            wait_for_finalization=wait_for_finalization,
+            version_key=version_key,
+        )
+        if wandb_on:
+            wandb.log({"set_weights": 1})
 
-        if not should_wait_to_set_weights(current_block, last_updated, tempo):
-            success = subtensor.set_weights(
-                wallet=wallet,
-                netuid=netuid,
-                uids=uids,
-                weights=weights,
-                wait_for_inclusion=wait_for_inclusion,
-                wait_for_finalization=wait_for_finalization,
-                version_key=version_key,
-            )
-            if wandb_on:
-                wandb.log({"set_weights": 1})
-            
-            return success
-        else:
-            bt_logging.info(
-                f"Not setting weights because we did it {current_block - last_updated} blocks ago. Last updated: {last_updated}, Current Block: {current_block}"
-            )
-            return False
+        return success
     except Exception as e:
         if wandb_on:
             wandb.log({"set_weights": 0})

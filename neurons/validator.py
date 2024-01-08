@@ -301,10 +301,6 @@ class neuron:
                     self.config.neuron.disable_set_weights
                 ):
                     bt.logging.info(f"Setting weights {self.moving_averaged_scores}")
-                    hyperparameters = self.subtensor.get_subnet_hyperparameters(
-                        self.config.netuid, self.current_block
-                    )
-                    tempo = hyperparameters.tempo
                     set_weights_for_validator(
                         subtensor=self.subtensor,
                         wallet=self.wallet,
@@ -312,7 +308,6 @@ class neuron:
                         netuid=self.config.netuid,
                         moving_averaged_scores=self.moving_averaged_scores,
                         wandb_on=self.config.wandb.on,
-                        tempo=tempo,
                     )
                     save_state(self)
 
