@@ -34,7 +34,6 @@ def set_weights_for_validator(
     metagraph: "bt.metagraph",
     moving_averaged_scores: "torch.Tensor",
     wandb_on: bool = False,
-    tempo: int = 360,
     wait_for_inclusion: bool = False,
     wait_for_finalization: bool = False,
 ):

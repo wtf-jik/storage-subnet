@@ -18,7 +18,7 @@
 
 import torch
 
-from storage.shared.weights import set_weights
+from storage.shared.weights import set_weights, should_set_weights
 
 
 def set_weights_for_miner(
@@ -74,7 +74,7 @@ def set_weights_for_miner(
     last_updated = metagraph.last_update[uid].item()
     current_block = subtensor.get_current_block()
 
-    if not should_wait_to_set_weights(current_block, last_updated, tempo):
+    if should_set_weights(current_block, last_updated, tempo):
         success = set_weights(
             subtensor=subtensor,
             wallet=wallet,
