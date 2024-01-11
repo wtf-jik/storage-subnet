@@ -23,7 +23,13 @@ import aioredis
 import bittensor as bt
 
 
-async def store_chunk_metadata(r, chunk_hash, filepath, size, seed):
+#
+# TODO:
+#   - but do we need the relation hash:hotkey ?
+#   - we do not need the filepath here
+#   - we can assume that hash will be within f'{database.directory}/{chunk_hash}'
+#
+async def store_chunk_metadata(r, chunk_hash, hotkey, filepath, size, seed):
     """
     Stores the metadata of a chunk in a Redis database.
 
@@ -38,6 +44,7 @@ async def store_chunk_metadata(r, chunk_hash, filepath, size, seed):
     """
     # Ensure that all data are in the correct format
     metadata = {
+        "hotkey": hotkey,
         "filepath": filepath,
         "size": str(size),  # Convert size to string
         "seed": seed,  # Store seed directly
@@ -48,7 +55,7 @@ async def store_chunk_metadata(r, chunk_hash, filepath, size, seed):
         await r.hset(chunk_hash, key, value)
 
 
-async def store_or_update_chunk_metadata(r, chunk_hash, filepath, size, seed):
+async def store_or_update_chunk_metadata(r, chunk_hash, hotkey, filepath, size, seed):
     """
     Stores or updates the metadata of a chunk in a Redis database.
 
@@ -67,7 +74,7 @@ async def store_or_update_chunk_metadata(r, chunk_hash, filepath, size, seed):
         await update_seed_info(r, chunk_hash, seed)
     else:
         # Add new entry
-        await store_chunk_metadata(r, chunk_hash, filepath, size, seed)
+        await store_chunk_metadata(r, chunk_hash, hotkey, filepath, size, seed)
 
 
 async def update_seed_info(r, chunk_hash, seed):
