@@ -86,7 +86,7 @@ async def rollover_storage_stats(database: aioredis.Redis):
     Args:
         database (redis.Redis): The Redis client instance for database operations.
     """
-    miners_stats_keys = [stats_key async for stats_key in database.scan_iter("stats:*")]
+    miner_stats_keys = [stats_key async for stats_key in database.scan_iter("stats:*")]
     tasks = [reset_storage_stats(stats_key, database) for stats_key in miner_stats_keys]
     await asyncio.gather(*tasks)
 
