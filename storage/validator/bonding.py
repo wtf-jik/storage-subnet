@@ -56,6 +56,41 @@ GOLD_TIER_TOTAL_SUCCESSES = 10**3 * 5  # 5,000
 SILVER_TIER_TOTAL_SUCCESSES = 10**3  # 1,000
 
 
+async def reset_storage_stats(ss58_address: str, database: aioredis.Redis):
+    """
+    Asynchronously resets the storage statistics for a miner.
+
+    This function should be called periodically to reset the statistics for a miner while keeping the tier and total_successes.
+
+    Args:
+        ss58_address (str): The unique address (hotkey) of the miner.
+        database (redis.Redis): The Redis client instance for database operations.
+    """
+    await database.hmset(
+        f"stats:{ss58_address}",
+        {
+            "store_attempts": 0,
+            "store_successes": 0,
+            "challenge_successes": 0,
+            "challenge_attempts": 0,
+            "retrieval_successes": 0,
+            "retrieval_attempts": 0,
+        },
+    )
+
+
+async def rollover_storage_stats(database: aioredis.Redis):
+    """
+    Asynchronously resets the storage statistics for all miners.
+    This function should be called periodically to reset the statistics for all miners.
+    Args:
+        database (redis.Redis): The Redis client instance for database operations.
+    """
+    miners = [miner async for miner in database.scan_iter("stats:*")]
+    tasks = [reset_storage_stats(miner, database) for miner in miners]
+    await asyncio.gather(*tasks)
+
+
 async def miner_is_registered(ss58_address: str, database: aioredis.Redis):
     """
     Checks if a miner is registered in the database.
@@ -89,6 +124,7 @@ async def register_miner(ss58_address: str, database: aioredis.Redis):
             "challenge_attempts": 0,
             "retrieval_successes": 0,
             "retrieval_attempts": 0,
+            "total_successes": 0,
             "tier": "Bronze",  # Init to bronze status
             "storage_limit": STORAGE_LIMIT_BRONZE,  # in GB
         },
@@ -117,18 +153,14 @@ async def update_statistics(
     # Update statistics in the stats hash
     stats_key = f"stats:{ss58_address}"
 
-    if task_type == "store":
-        await database.hincrby(stats_key, "store_attempts", 1)
+    if task_type in ["store", "challenge", "retrieve"]:
+        await database.hincrby(stats_key, f"{task_type}_attempts", 1)
         if success:
-            await database.hincrby(stats_key, "store_successes", 1)
-    elif task_type == "challenge":
-        await database.hincrby(stats_key, "challenge_attempts", 1)
-        if success:
-            await database.hincrby(stats_key, "challenge_successes", 1)
-    elif task_type == "retrieve":
-        await database.hincrby(stats_key, "retrieval_attempts", 1)
-        if success:
-            await database.hincrby(stats_key, "retrieval_successes", 1)
+            await database.hincrby(stats_key, f"{task_type}_successes", 1)
+
+    # Update the total successes that we rollover every epoch
+    if success:
+        await database.hincrby(stats_key, "total_successes", 1)
 
 
 async def compute_tier(stats_key: str, database: aioredis.Redis):
@@ -140,11 +172,11 @@ async def compute_tier(stats_key: str, database: aioredis.Redis):
         stats_key (str): The key in the database where the miner's statistics are stored.
         database (redis.Redis): The Redis client instance for database operations.
     """
-    data = await database.hgetall(stats_key)
+    stats_key = stats_key.decode() if isinstance(stats_key, bytes) else stats_key
+    ss58_address = stats_key.split(":")[1]
 
-    registered = await miner_is_registered(stats_key, database)
-    if not data:
-        bt.logging.warning(f"No statistics data found for {stats_key}! Skipping...")
+    if not await miner_is_registered(ss58_address, database):
+        bt.logging.warning(f"{stats_key} is not registered! Skipping...")
         return
 
     # Get the number of successful challenges
@@ -168,7 +200,7 @@ async def compute_tier(stats_key: str, database: aioredis.Redis):
         retrieval_successes / retrieval_attempts if retrieval_attempts > 0 else 0
     )
     store_success_rate = store_successes / store_attempts if store_attempts > 0 else 0
-    total_successes = challenge_successes + retrieval_successes + store_successes
+    total_successes = int(await database.hget(stats_key, "total_successes"))
 
     if (
         challenge_success_rate >= SUPER_SAIYAN_CHALLENGE_SUCCESS_RATE
