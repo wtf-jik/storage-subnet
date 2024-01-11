@@ -176,8 +176,7 @@ async def compute_tier(stats_key: str, database: aioredis.Redis):
     ss58_address = stats_key.split(":")[1]
 
     if not await miner_is_registered(ss58_address, database):
-        bt.logging.warning(f"{stats_key} is not registered! Skipping...")
-        return
+        await register_miner(ss58_address, database)
 
     # Get the number of successful challenges
     challenge_successes = int(await database.hget(stats_key, "challenge_successes"))
