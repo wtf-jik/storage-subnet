@@ -758,7 +758,7 @@ class miner:
         bt.logging.debug(f"retrieved data: {pformat(data)}")
 
         # load the data from the filesystem
-        filepath = f'{self.config.database.directory}/{synapse.challenge_hash}'
+        filepath = f'{self.config.database.directory}/{synapse.data_hash}'
         if not os.path.isfile(filepath):
             bt.logging.error(f"No file found for {synapse.data_hash}")
             return synapse
