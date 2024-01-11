@@ -56,7 +56,7 @@ GOLD_TIER_TOTAL_SUCCESSES = 10**3 * 5  # 5,000
 SILVER_TIER_TOTAL_SUCCESSES = 10**3  # 1,000
 
 
-async def reset_storage_stats(ss58_address: str, database: aioredis.Redis):
+async def reset_storage_stats(stats_key: str, database: aioredis.Redis):
     """
     Asynchronously resets the storage statistics for a miner.
 
@@ -67,7 +67,7 @@ async def reset_storage_stats(ss58_address: str, database: aioredis.Redis):
         database (redis.Redis): The Redis client instance for database operations.
     """
     await database.hmset(
-        f"stats:{ss58_address}",
+        stats_key,
         {
             "store_attempts": 0,
             "store_successes": 0,
@@ -86,8 +86,8 @@ async def rollover_storage_stats(database: aioredis.Redis):
     Args:
         database (redis.Redis): The Redis client instance for database operations.
     """
-    miners = [miner async for miner in database.scan_iter("stats:*")]
-    tasks = [reset_storage_stats(miner, database) for miner in miners]
+    miners_stats_keys = [stats_key async for stats_key in database.scan_iter("stats:*")]
+    tasks = [reset_storage_stats(stats_key, database) for stats_key in miner_stats_keys]
     await asyncio.gather(*tasks)
 
 
@@ -159,6 +159,8 @@ async def update_statistics(
             await database.hincrby(stats_key, f"{task_type}_successes", 1)
 
     # Update the total successes that we rollover every epoch
+    if await database.hget(stats_key, "total_successes") == None:
+        await database.hset(stats_key, "total_successes", 0)
     if success:
         await database.hincrby(stats_key, "total_successes", 1)
 
@@ -172,11 +174,9 @@ async def compute_tier(stats_key: str, database: aioredis.Redis):
         stats_key (str): The key in the database where the miner's statistics are stored.
         database (redis.Redis): The Redis client instance for database operations.
     """
-    stats_key = stats_key.decode() if isinstance(stats_key, bytes) else stats_key
-    ss58_address = stats_key.split(":")[1]
-
-    if not await miner_is_registered(ss58_address, database):
-        await register_miner(ss58_address, database)
+    if not await database.exists(stats_key):
+        bt.logging.warning(f"Miner key {stats_key} is not registered!")
+        return
 
     # Get the number of successful challenges
     challenge_successes = int(await database.hget(stats_key, "challenge_successes"))
@@ -199,7 +199,12 @@ async def compute_tier(stats_key: str, database: aioredis.Redis):
         retrieval_successes / retrieval_attempts if retrieval_attempts > 0 else 0
     )
     store_success_rate = store_successes / store_attempts if store_attempts > 0 else 0
-    total_successes = int(await database.hget(stats_key, "total_successes"))
+
+    total_successes = await database.hget(stats_key, "total_successes")
+    if total_successes is None:
+        # This value wasn't stored. Legacy miners will have this issue.
+        total_successes = store_success_rate + retrieval_success_rate + challenge_success_rate
+    total_successes = int(total_successes)
 
     if (
         challenge_success_rate >= SUPER_SAIYAN_CHALLENGE_SUCCESS_RATE
@@ -268,6 +273,11 @@ async def compute_all_tiers(database: aioredis.Redis):
     miners = [miner async for miner in database.scan_iter("stats:*")]
     tasks = [compute_tier(miner, database) for miner in miners]
     await asyncio.gather(*tasks)
+
+    # Reset the statistics for the next epoch
+    bt.logging.info(f"Resetting statistics for all hotkeys...")
+    await rollover_storage_stats(database)
+
 
 
 async def get_tier_factor(ss58_address: str, database: aioredis.Redis):
