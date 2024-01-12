@@ -310,8 +310,6 @@ class neuron:
             bt.logging.debug(f"subscription block hash: {block_hash}")
             events = substrate.get_events(block_hash)
 
-            self.log(f"Events: {pformat(events)}\n")
-
             for event in events:
                 event_dict = event["event"].decode()
                 if event_dict["event_id"] == "NeuronRegistered":
@@ -330,6 +328,7 @@ class neuron:
                 hotkeys = deepcopy(self.rebalance_queue)
                 self.rebalance_queue.clear()
 
+                bt.logging.debug(f"Running rebalance in background on hotkeys {hotkeys}")
                 self.loop.run_until_complete(
                     rebalance_data(self, k=2, dropped_hotkeys=hotkeys, hotkey_replaced=True)
                 )
