@@ -294,12 +294,14 @@ class neuron:
 
                 # Set the weights on chain.
                 bt.logging.info(f"Checking if should set weights")
-                if should_set_weights(
+                validator_should_set_weights = should_set_weights(
                     get_current_block(self.subtensor),
                     self.prev_step_block,
                     self.config.neuron.set_weights_epoch_length,
                     self.config.neuron.disable_set_weights
-                ):
+                )
+                bt.logging.info(f"Should validator check weights? -> {validator_should_set_weights}")
+                if validator_should_set_weights:
                     bt.logging.info(f"Setting weights {self.moving_averaged_scores}")
                     set_weights_for_validator(
                         subtensor=self.subtensor,
