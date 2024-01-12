@@ -557,14 +557,10 @@ class miner:
             )
             bt.logging.info(f"stored data {data_hash} in filepath: {filepath}")
             # Add the initial chunk, size, and validator seed information
-            # TODO:
-            #  - add hotkey?
-            #  - remove filepath?
             await store_chunk_metadata(
                 self.database,
                 data_hash,
                 self.wallet.hotkey.ss58_address,
-                filepath,
                 sys.getsizeof(encrypted_byte_data),
                 synapse.seed,
             )

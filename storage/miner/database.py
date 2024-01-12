@@ -23,20 +23,14 @@ import aioredis
 import bittensor as bt
 
 
-#
-# TODO:
-#   - but do we need the relation hash:hotkey ?
-#   - we do not need the filepath here
-#   - we can assume that hash will be within f'{database.directory}/{chunk_hash}'
-#
-async def store_chunk_metadata(r, chunk_hash, hotkey, filepath, size, seed):
+async def store_chunk_metadata(r, chunk_hash, hotkey, size, seed):
     """
     Stores the metadata of a chunk in a Redis database.
 
     Args:
         r (redis.Redis): The Redis connection instance.
         chunk_hash (str): The unique hash identifying the chunk.
-        filepath (str): The file path associated with the chunk.
+        hotkey (str): Miner hotkey associated with the chunk.
         size (int): The size of the chunk.
         seed (str): The seed associated with the chunk.
 
@@ -45,7 +39,6 @@ async def store_chunk_metadata(r, chunk_hash, hotkey, filepath, size, seed):
     # Ensure that all data are in the correct format
     metadata = {
         "hotkey": hotkey,
-        "filepath": filepath,
         "size": str(size),  # Convert size to string
         "seed": seed,  # Store seed directly
     }
@@ -55,14 +48,13 @@ async def store_chunk_metadata(r, chunk_hash, hotkey, filepath, size, seed):
         await r.hset(chunk_hash, key, value)
 
 
-async def store_or_update_chunk_metadata(r, chunk_hash, hotkey, filepath, size, seed):
+async def store_or_update_chunk_metadata(r, chunk_hash, hotkey, size, seed):
     """
     Stores or updates the metadata of a chunk in a Redis database.
 
     Args:
         r (redis.Redis): The Redis connection instance.
         chunk_hash (str): The unique hash identifying the chunk.
-        filepath (str): The file path associated with the chunk.
         size (int): The size of the chunk.
         seed (str): The seed associated with the chunk.
 
@@ -74,7 +66,7 @@ async def store_or_update_chunk_metadata(r, chunk_hash, hotkey, filepath, size, 
         await update_seed_info(r, chunk_hash, seed)
     else:
         # Add new entry
-        await store_chunk_metadata(r, chunk_hash, hotkey, filepath, size, seed)
+        await store_chunk_metadata(r, chunk_hash, hotkey, size, seed)
 
 
 async def update_seed_info(r, chunk_hash, seed):
