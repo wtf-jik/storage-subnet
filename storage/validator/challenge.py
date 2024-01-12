@@ -49,6 +49,7 @@ from storage.validator.bonding import (
     get_tier_factor,
 )
 
+CHALLENGE_FAILURE_REWARD = -0.01
 
 async def handle_challenge(self, uid: int) -> typing.Tuple[bool, protocol.Challenge]:
     """
@@ -213,7 +214,7 @@ async def challenge_data(self):
 
         # Apply reward for this challenge
         tier_factor = await get_tier_factor(hotkey, self.database)
-        rewards[idx] = 1.0 * tier_factor if verified else 0.0
+        rewards[idx] = 1.0 * tier_factor if verified else CHALLENGE_FAILURE_REWARD
 
         # Log the event data for this specific challenge
         event.uids.append(uid)

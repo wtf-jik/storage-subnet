@@ -283,7 +283,7 @@ async def create_reward_vector(
 
         # Apply reward for this task
         tier_factor = await get_tier_factor(hotkey, self.database)
-        rewards[idx] = 1.0 * tier_factor if success else 0.0
+        rewards[idx] = 1.0 * tier_factor if success else 0.0 # TODO: go off task_type
 
         event.successful.append(success)
         event.uids.append(uid)
