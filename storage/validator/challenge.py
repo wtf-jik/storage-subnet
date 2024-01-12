@@ -34,6 +34,7 @@ from pprint import pformat
 from Crypto.Random import get_random_bytes, random
 
 from storage import protocol
+from storage import RETRIEVAL_FAILURE_REWARD
 from storage.validator.event import EventSchema
 from storage.shared.ecc import setup_CRS, ecc_point_to_hex
 from storage.validator.utils import get_random_chunksize, get_available_query_miners
@@ -49,7 +50,6 @@ from storage.validator.bonding import (
     get_tier_factor,
 )
 
-CHALLENGE_FAILURE_REWARD = -0.01
 
 async def handle_challenge(self, uid: int) -> typing.Tuple[bool, protocol.Challenge]:
     """

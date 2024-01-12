@@ -25,6 +25,7 @@ from storage.validator.bonding import update_statistics
 
 MONITOR_FAILURE_REWARD = -0.01
 
+
 async def ping_uids(self, uids):
     """
     Ping a list of UIDs to check their availability.

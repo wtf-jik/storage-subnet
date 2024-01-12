@@ -29,6 +29,7 @@ from pprint import pformat
 from Crypto.Random import get_random_bytes, random
 
 from storage import protocol
+from storage import RETRIEVAL_FAILURE_REWARD
 from storage.validator.event import EventSchema
 from storage.shared.ecc import hash_data
 from storage.shared.utils import (
@@ -53,7 +54,6 @@ from storage.validator.bonding import update_statistics, get_tier_factor
 from .network import ping_and_retry_uids
 from .reward import create_reward_vector
 
-RETRIEVAL_FAILURE_REWARD = -0.05
 
 async def handle_retrieve(self, uid):
     bt.logging.trace(f"handle_retrieve uid: {uid}")
@@ -218,7 +218,9 @@ async def retrieve_data(
             bt.logging.error(
                 f"data verification failed! {pformat(response.axon.dict())}"
             )
-            rewards[idx] = RETRIEVAL_FAILURE_REWARD # Losing use data is unacceptable, harsh punishment
+            rewards[
+                idx
+            ] = RETRIEVAL_FAILURE_REWARD  # Losing use data is unacceptable, harsh punishment
         else:
             # Success. Reward based on miner tier
             bt.logging.trace("Getting tier factor for hotkey {}".format(hotkey))
