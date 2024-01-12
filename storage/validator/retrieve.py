@@ -29,7 +29,7 @@ from pprint import pformat
 from Crypto.Random import get_random_bytes, random
 
 from storage import protocol
-from storage import RETRIEVAL_FAILURE_REWARD
+from storage.validator import RETRIEVAL_FAILURE_REWARD
 from storage.validator.event import EventSchema
 from storage.shared.ecc import hash_data
 from storage.shared.utils import (

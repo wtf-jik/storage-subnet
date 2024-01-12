@@ -34,7 +34,7 @@ from pprint import pformat
 from Crypto.Random import get_random_bytes, random
 
 from storage import protocol
-from storage import RETRIEVAL_FAILURE_REWARD
+from storage.validator import CHALLENGE_FAILURE_REWARD
 from storage.validator.event import EventSchema
 from storage.shared.ecc import setup_CRS, ecc_point_to_hex
 from storage.validator.utils import get_random_chunksize, get_available_query_miners
