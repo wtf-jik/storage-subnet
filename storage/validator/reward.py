@@ -35,7 +35,7 @@ from .database import add_metadata_to_hotkey
 from .bonding import update_statistics, get_tier_factor
 from .event import EventSchema
 
-from storage.validator import (
+from storage.constants import (
     STORE_FAILURE_REWARD,
     RETRIEVAL_FAILURE_REWARD,
     CHALLENGE_FAILURE_REWARD,

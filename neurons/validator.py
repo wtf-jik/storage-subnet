@@ -235,7 +235,9 @@ class neuron:
                         f"Validator is not registered - hotkey {self.wallet.hotkey.ss58_address} not in metagraph"
                     )
 
-                bt.logging.info(f"step({self.step}) block({get_current_block(self.subtensor)})")
+                bt.logging.info(
+                    f"step({self.step}) block({get_current_block(self.subtensor)})"
+                )
 
                 # Run multiple forwards.
                 async def run_forward():
@@ -253,7 +255,7 @@ class neuron:
                 should_checkpoint_validator = should_checkpoint(
                     current_block,
                     self.prev_step_block,
-                    self.config.neuron.checkpoint_block_length
+                    self.config.neuron.checkpoint_block_length,
                 )
                 bt.logging.debug(
                     f"should_checkpoint() params: (current block) {current_block} (prev block) {self.prev_step_block} (checkpoint_block_length) {self.config.neuron.checkpoint_block_length}\n"
@@ -269,9 +271,11 @@ class neuron:
                     get_current_block(self.subtensor),
                     self.prev_step_block,
                     self.config.neuron.set_weights_epoch_length,
-                    self.config.neuron.disable_set_weights
+                    self.config.neuron.disable_set_weights,
                 )
-                bt.logging.info(f"Should validator check weights? -> {validator_should_set_weights}")
+                bt.logging.info(
+                    f"Should validator check weights? -> {validator_should_set_weights}"
+                )
                 if validator_should_set_weights:
                     bt.logging.info(f"Setting weights {self.moving_averaged_scores}")
                     set_weights_for_validator(
@@ -323,9 +327,7 @@ class neuron:
             type_registry=bt.__type_registry__,
         )
 
-        def neuron_registered_subscription_handler(
-            obj, update_nr, subscription_id
-        ):
+        def neuron_registered_subscription_handler(obj, update_nr, subscription_id):
             self.log(f"New block #: {obj['header']['number']}\n")
             bt.logging.debug(obj)
 
@@ -348,18 +350,23 @@ class neuron:
                         self.rebalance_queue.append(hotkey)
 
             # If we have some hotkeys deregistered, and it's been 5 blocks since we've caught a registration: rebalance
-            if len(self.rebalance_queue) > 0 and self.last_registered_block + 5 <= block_no:
+            if (
+                len(self.rebalance_queue) > 0
+                and self.last_registered_block + 5 <= block_no
+            ):
                 hotkeys = deepcopy(self.rebalance_queue)
                 self.rebalance_queue.clear()
 
-                bt.logging.debug(f"Running rebalance in background on hotkeys {hotkeys}")
+                bt.logging.debug(
+                    f"Running rebalance in background on hotkeys {hotkeys}"
+                )
                 self.loop.run_until_complete(
-                    rebalance_data(self, k=2, dropped_hotkeys=hotkeys, hotkey_replaced=True)
+                    rebalance_data(
+                        self, k=2, dropped_hotkeys=hotkeys, hotkey_replaced=True
+                    )
                 )
 
-        substrate.subscribe_block_headers(
-            neuron_registered_subscription_handler
-        )
+        substrate.subscribe_block_headers(neuron_registered_subscription_handler)
 
     def run_subscription_thread(self):
         """

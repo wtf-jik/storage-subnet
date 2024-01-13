@@ -34,7 +34,7 @@ from pprint import pformat
 from Crypto.Random import get_random_bytes, random
 
 from storage import protocol
-from storage.validator import CHALLENGE_FAILURE_REWARD
+from storage.constants import CHALLENGE_FAILURE_REWARD
 from storage.validator.event import EventSchema
 from storage.shared.ecc import setup_CRS, ecc_point_to_hex
 from storage.validator.utils import get_random_chunksize, get_available_query_miners
@@ -272,7 +272,5 @@ def _filter_verified_responses(uids, responses):
     if len(not_none_responses) == 0:
         return (), ()
 
-    uids, responses = zip(
-        *not_none_responses
-    )
+    uids, responses = zip(*not_none_responses)
     return uids, responses

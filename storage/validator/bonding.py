@@ -203,7 +203,9 @@ async def compute_tier(stats_key: str, database: aioredis.Redis):
     total_successes = await database.hget(stats_key, "total_successes")
     if total_successes is None:
         # This value wasn't stored. Legacy miners will have this issue.
-        total_successes = store_success_rate + retrieval_success_rate + challenge_success_rate
+        total_successes = (
+            store_success_rate + retrieval_success_rate + challenge_success_rate
+        )
     total_successes = int(total_successes)
 
     if (
@@ -277,7 +279,6 @@ async def compute_all_tiers(database: aioredis.Redis):
     # Reset the statistics for the next epoch
     bt.logging.info(f"Resetting statistics for all hotkeys...")
     await rollover_storage_stats(database)
-
 
 
 async def get_tier_factor(ss58_address: str, database: aioredis.Redis):
