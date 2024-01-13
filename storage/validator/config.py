@@ -236,6 +236,12 @@ def add_args(cls, parser):
         default=False,
     )
     parser.add_argument(
+        "--neuron.subscription_logging_path",
+        type=str,
+        help="The path to save subscription logs.",
+        default="subscription_logs.txt",
+    )
+    parser.add_argument(
         "--neuron.chunk_factor",
         type=int,
         help="The chunk factor to divide data.",
