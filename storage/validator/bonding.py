@@ -73,8 +73,8 @@ async def reset_storage_stats(stats_key: str, database: aioredis.Redis):
             "store_successes": 0,
             "challenge_successes": 0,
             "challenge_attempts": 0,
-            "retrieval_successes": 0,
-            "retrieval_attempts": 0,
+            "retrieve_successes": 0,
+            "retrieve_attempts": 0,
         },
     )
 
@@ -122,8 +122,8 @@ async def register_miner(ss58_address: str, database: aioredis.Redis):
             "store_successes": 0,
             "challenge_successes": 0,
             "challenge_attempts": 0,
-            "retrieval_successes": 0,
-            "retrieval_attempts": 0,
+            "retrieve_successes": 0,
+            "retrieve_attempts": 0,
             "total_successes": 0,
             "tier": "Bronze",  # Init to bronze status
             "storage_limit": STORAGE_LIMIT_BRONZE,  # in GB
@@ -181,13 +181,13 @@ async def compute_tier(stats_key: str, database: aioredis.Redis):
     # Get the number of successful challenges
     challenge_successes = int(await database.hget(stats_key, "challenge_successes"))
     # Get the number of successful retrievals
-    retrieval_successes = int(await database.hget(stats_key, "retrieval_successes"))
+    retrieval_successes = int(await database.hget(stats_key, "retrieve_successes"))
     # Get the number of successful stores
     store_successes = int(await database.hget(stats_key, "store_successes"))
     # Get the number of total challenges
     challenge_attempts = int(await database.hget(stats_key, "challenge_attempts"))
     # Get the number of total retrievals
-    retrieval_attempts = int(await database.hget(stats_key, "retrieval_attempts"))
+    retrieval_attempts = int(await database.hget(stats_key, "retrieve_attempts"))
     # Get the number of total stores
     store_attempts = int(await database.hget(stats_key, "store_attempts"))
 
