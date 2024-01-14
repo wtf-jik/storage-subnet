@@ -145,9 +145,9 @@ class RetrieveData:
             bittensor.logging.debug("subtensor:", sub)
             RetrieveData.run(cli, sub)
         finally:
-            if 'subtensor' in locals():
+            if "subtensor" in locals():
                 subtensor.close()
-                bittensor.logging.debug('closing subtensor connection')
+                bittensor.logging.debug("closing subtensor connection")
 
     @staticmethod
     def _run(cli, sub):

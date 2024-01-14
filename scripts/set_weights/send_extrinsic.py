@@ -29,9 +29,9 @@ async def main(args):
         bt.logging.info(f"Were weights set? {weights_were_set}")
     # After all we have to ensure subtensor connection is closed properly
     finally:
-        if 'subtensor' in locals():
+        if "subtensor" in locals():
             subtensor.close()
-            bittensor.logging.debug('closing subtensor connection')
+            bittensor.logging.debug("closing subtensor connection")
 
 
 if __name__ == "__main__":

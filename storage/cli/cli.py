@@ -75,8 +75,7 @@ COMMANDS = {
         "commands": {
             "stats": ListMinerStats,  # lists all miner stats associated with hotkey
         },
-    }
-
+    },
 }
 
 

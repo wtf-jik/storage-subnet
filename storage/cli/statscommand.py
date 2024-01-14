@@ -26,7 +26,6 @@ from storage.validator.database import get_miner_statistics
 
 
 async def show_all_miner_statistics(r: aioredis.Redis):
-
     data = await get_miner_statistics(r)
 
     console = Console()
@@ -44,16 +43,23 @@ async def show_all_miner_statistics(r: aioredis.Redis):
     table.add_column("Tier")
     table.add_column("Storage Limit (GB)")
 
-
     for hotkey, stats in data.items():
         # Compute the success rate for each task type
         challenge_success_rate = (
-            int(stats["challenge_successes"]) / int(stats["challenge_attempts"]) if int(stats["challenge_attempts"]) > 0 else 0
+            int(stats["challenge_successes"]) / int(stats["challenge_attempts"])
+            if int(stats["challenge_attempts"]) > 0
+            else 0
         )
         retrieval_success_rate = (
-            int(stats["retrieve_successes"]) / int(stats["retrieve_attempts"]) if int(stats["retrieve_attempts"]) > 0 else 0
+            int(stats["retrieve_successes"]) / int(stats["retrieve_attempts"])
+            if int(stats["retrieve_attempts"]) > 0
+            else 0
         )
-        store_success_rate = int(stats["store_successes"]) / int(stats["store_attempts"]) if int(stats["store_attempts"]) > 0 else 0
+        store_success_rate = (
+            int(stats["store_successes"]) / int(stats["store_attempts"])
+            if int(stats["store_attempts"]) > 0
+            else 0
+        )
 
         # Add rows to the table
         table.add_row(
@@ -71,7 +77,6 @@ async def show_all_miner_statistics(r: aioredis.Redis):
 
     # Print the table to the console
     console.print(table)
-
 
 
 class ListMinerStats:

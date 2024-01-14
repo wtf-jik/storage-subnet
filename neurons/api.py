@@ -460,8 +460,8 @@ class neuron:
 
         # After all we have to ensure subtensor connection is closed properly
         finally:
-            if hasattr(self, 'subtensor'):
-                bittensor.logging.debug('Closing subtensor connection')
+            if hasattr(self, "subtensor"):
+                bittensor.logging.debug("Closing subtensor connection")
                 self.subtensor.close()
 
     def run_in_background_thread(self):
