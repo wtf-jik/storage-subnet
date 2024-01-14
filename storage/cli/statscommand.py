@@ -22,21 +22,12 @@ import asyncio
 import bittensor as bt
 from rich.table import Table
 from rich.console import Console
-from storage.validator.database import get_single_miner_statistics
+from storage.validator.database import get_miner_statistics
 
 
-async def show_single_miner_statistics(ss58_address: str, r: aioredis.Redis):
+async def show_all_miner_statistics(r: aioredis.Redis):
 
-    stats = await get_single_miner_statistics(ss58_address, r)
-
-    # Compute the success rate for each task type
-    challenge_success_rate = (
-        int(stats["challenge_successes"]) / int(stats["challenge_attempts"]) if int(stats["challenge_attempts"]) > 0 else 0
-    )
-    retrieval_success_rate = (
-        int(stats["retrieve_successes"]) / int(stats["retrieve_attempts"]) if int(stats["retrieve_attempts"]) > 0 else 0
-    )
-    store_success_rate = int(stats["store_successes"]) / int(stats["store_attempts"]) if int(stats["store_attempts"]) > 0 else 0
+    data = await get_miner_statistics(r)
 
     console = Console()
 
@@ -53,22 +44,34 @@ async def show_single_miner_statistics(ss58_address: str, r: aioredis.Redis):
     table.add_column("Tier")
     table.add_column("Storage Limit (GB)")
 
-    # Add rows to the table
-    table.add_row(
-        ss58_address,
-        stats["total_successes"],
-        stats["store_attempts"] + " | " + stats["store_successes"],
-        stats["challenge_successes"] + " | " + stats["challenge_attempts"],
-        stats["retrieve_successes"] + " | " + stats["retrieve_attempts"],
-        str(store_success_rate * 100),
-        str(challenge_success_rate * 100),
-        str(retrieval_success_rate * 100),
-        stats["tier"],
-        str(int(stats["storage_limit"]) // (1024**3)),
-    )
+
+    for hotkey, stats in data.items():
+        # Compute the success rate for each task type
+        challenge_success_rate = (
+            int(stats["challenge_successes"]) / int(stats["challenge_attempts"]) if int(stats["challenge_attempts"]) > 0 else 0
+        )
+        retrieval_success_rate = (
+            int(stats["retrieve_successes"]) / int(stats["retrieve_attempts"]) if int(stats["retrieve_attempts"]) > 0 else 0
+        )
+        store_success_rate = int(stats["store_successes"]) / int(stats["store_attempts"]) if int(stats["store_attempts"]) > 0 else 0
+
+        # Add rows to the table
+        table.add_row(
+            hotkey,
+            stats["total_successes"],
+            stats["store_attempts"] + " | " + stats["store_successes"],
+            stats["challenge_successes"] + " | " + stats["challenge_attempts"],
+            stats["retrieve_successes"] + " | " + stats["retrieve_attempts"],
+            str(store_success_rate * 100),
+            str(challenge_success_rate * 100),
+            str(retrieval_success_rate * 100),
+            stats["tier"],
+            str(int(stats["storage_limit"]) // (1024**3)),
+        )
 
     # Print the table to the console
     console.print(table)
+
 
 
 class ListMinerStats:
@@ -93,13 +96,9 @@ class ListMinerStats:
     def run(cli):
         r"""Lists hashes available to fetch data from the Bittensor network."""
 
-        # Get hotkey 
-        wallet = bt.wallet( cli.config.wallet.name, cli.config.wallet.hotkey )
-        hotkey = wallet.hotkey.ss58_address
-
         # Get stats from redis
         r = aioredis.StrictRedis(db=cli.config.index)
-        coro = show_single_miner_statistics(hotkey, r)
+        coro = show_all_miner_statistics(r)
         asyncio.run(coro)
 
     @staticmethod
