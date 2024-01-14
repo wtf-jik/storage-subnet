@@ -181,3 +181,9 @@ def run(self):
     # In case of unforeseen errors, the miner will log the error and continue operations.
     except Exception as e:
         bt.logging.error(traceback.format_exc())
+
+    # After all we have to ensure subtensor connection is closed properly
+    finally:
+        if hasattr(self, 'subtensor'):
+            bittensor.logging.debug('Closing subtensor connection')
+            self.subtensor.close()
