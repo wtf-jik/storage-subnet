@@ -64,25 +64,27 @@ async def store_or_update_chunk_metadata(r, chunk_hash, filepath, hotkey, size, 
     """
     if await r.exists(chunk_hash):
         # Update the existing entry with new seed information
-        await update_seed_info(r, chunk_hash, seed)
+        await update_seed_info(r, chunk_hash, hotkey, seed)
     else:
         # Add new entry
         await store_chunk_metadata(r, chunk_hash, filepath, hotkey, size, seed)
 
 
-async def update_seed_info(r, chunk_hash, seed):
+async def update_seed_info(r, chunk_hash, hotkey, seed):
     """
     Updates the seed information for a specific chunk in the Redis database.
 
     Args:
         r (redis.Redis): The Redis connection instance.
         chunk_hash (str): The unique hash identifying the chunk.
+        hotkey (str): The caller hotkey value to be updated.
         seed (str): The new seed value to be updated.
 
     This function updates the seed information for the specified chunk hash.
     """
     # Update the existing seed information
     await r.hset(chunk_hash, "seed", seed)
+    await r.hset(chunk_hash, "hotkey", hotkey)
 
 
 async def get_chunk_metadata(r, chunk_hash):

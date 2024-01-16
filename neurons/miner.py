@@ -552,7 +552,7 @@ class miner:
         bt.logging.trace(f"checking if data already exists...")
         if await self.database.exists(data_hash):
             # update the validator seed challenge hash in storage
-            await update_seed_info(self.database, data_hash, synapse.seed)
+            await update_seed_info(self.database, data_hash, synapse.dendrite.hotkey, synapse.seed)
         else:
             # Store the data in the filesystem
             filepath = save_data_to_filesystem(
@@ -564,7 +564,7 @@ class miner:
                 self.database,
                 data_hash,
                 filepath,
-                self.wallet.hotkey.ss58_address,
+                synapse.dendrite.hotkey,
                 sys.getsizeof(encrypted_byte_data),
                 synapse.seed,
             )
@@ -700,7 +700,7 @@ class miner:
         # update the commitment seed challenge hash in storage
         bt.logging.trace(f"udpating challenge miner storage: {pformat(data)}")
         await update_seed_info(
-            self.database, synapse.challenge_hash, new_seed.decode("utf-8")
+            self.database, synapse.challenge_hash, synapse.dendrite.hotkey, new_seed.decode("utf-8")
         )
 
         # Chunk the data according to the provided chunk_size
@@ -823,7 +823,7 @@ class miner:
 
         # store new seed
         bt.logging.trace(f"entering update_seed_info()")
-        await update_seed_info(self.database, synapse.data_hash, synapse.seed)
+        await update_seed_info(self.database, synapse.data_hash, synapse.dendrite.hotkey, synapse.seed)
         bt.logging.debug(f"udpated retrieve miner storage: {pformat(data)}")
 
         # Return base64 data
