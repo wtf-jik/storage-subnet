@@ -563,6 +563,7 @@ class miner:
             await store_chunk_metadata(
                 self.database,
                 data_hash,
+                filepath,
                 self.wallet.hotkey.ss58_address,
                 sys.getsizeof(encrypted_byte_data),
                 synapse.seed,
@@ -655,8 +656,17 @@ class miner:
             f"{self.config.database.directory}/{synapse.challenge_hash}"
         )
         if not os.path.isfile(filepath):
-            bt.logging.error(f"No file found for {synapse.challenge_hash}")
-            return synapse
+            bt.logging.warning(
+                f"No file found for {synapse.challenge_hash} in index, trying path construction..."
+            )
+
+            # fallback to load the data from the filesystem via database path construction
+            filepath = os.path.expanduser(
+                f"{self.config.database.directory}/{synapse.challenge_hash}"
+            )
+            if not os.path.isfile(filepath):
+                bt.logging.error(f"No file found for {synapse.challenge_hash}")
+                return synapse
 
         bt.logging.trace(f"entering load_from_filesystem()")
         try:
@@ -723,7 +733,7 @@ class miner:
 
         bt.logging.trace(f"getting merkle root...")
         synapse.merkle_root = merkle_tree.get_merkle_root()
- 
+
         if self.config.miner.verbose:
             bt.logging.debug(f"commitment: {str(synapse.commitment)[:24]}")
             bt.logging.debug(f"randomness: {str(synapse.randomness)[:24]}")
@@ -777,12 +787,19 @@ class miner:
         bt.logging.debug(f"retrieved data: {pformat(data)}")
 
         # load the data from the filesystem
-        filepath = os.path.expanduser(
-            f"{self.config.database.directory}/{synapse.data_hash}"
-        )
-        if not os.path.isfile(filepath):
-            bt.logging.error(f"No file found for {synapse.data_hash}")
-            return synapse
+        filepath = data.get(b"filepath", None)
+        if filepath == None:
+            bt.logging.warning(
+                f"No file found for {synapse.data_hash} in index, trying path construction..."
+            )
+
+            # fallback to load the data from the filesystem via database path construction
+            filepath = os.path.expanduser(
+                f"{self.config.database.directory}/{synapse.data_hash}"
+            )
+            if not os.path.isfile(filepath):
+                bt.logging.error(f"No file found for {synapse.data_hash}")
+                return synapse
 
         bt.logging.trace(f"entering load_from_filesystem()")
         try:

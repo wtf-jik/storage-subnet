@@ -32,36 +32,17 @@ tagged_tx_queue_registry = {
         "ValidTransaction": {
             "type": "struct",
             "type_mapping": [
-                [
-                    "priority",
-                    "TransactionPriority"
-                ],
-                [
-                    "requires",
-                    "Vec<TransactionTag>"
-                ],
-                [
-                    "provides",
-                    "Vec<TransactionTag>"
-                ],
-                [
-                    "longevity",
-                    "TransactionLongevity"
-                ],
-                [
-                    "propagate",
-                    "bool"
-                ]
-            ]
+                ["priority", "TransactionPriority"],
+                ["requires", "Vec<TransactionTag>"],
+                ["provides", "Vec<TransactionTag>"],
+                ["longevity", "TransactionLongevity"],
+                ["propagate", "bool"],
+            ],
         },
         "TransactionValidity": "Result<ValidTransaction, TransactionValidityError>",
         "TransactionSource": {
             "type": "enum",
-            "value_list": [
-                "InBlock",
-                "Local",
-                "External"
-            ]
+            "value_list": ["InBlock", "Local", "External"],
         },
     },
     "runtime_api": {
@@ -77,41 +58,50 @@ tagged_tx_queue_registry = {
                             "name": "tx",
                             "type": "Extrinsic",
                         },
-                        {
-                            "name": "block_hash",
-                            "type": "Hash"
-                        }
+                        {"name": "block_hash", "type": "Hash"},
                     ],
                     "type": "TransactionValidity",
                 },
             },
         }
-    }
+    },
 }
 
-def runtime_call(substrate: SubstrateInterface, api: str, method: str, params: list, block_hash: str):
+
+def runtime_call(
+    substrate: SubstrateInterface, api: str, method: str, params: list, block_hash: str
+):
     substrate.runtime_config.update_type_registry(tagged_tx_queue_registry)
-    runtime_call_def = substrate.runtime_config.type_registry["runtime_api"][api]['methods'][method]
-    runtime_api_types = substrate.runtime_config.type_registry["runtime_api"][api].get("types", {})
+    runtime_call_def = substrate.runtime_config.type_registry["runtime_api"][api][
+        "methods"
+    ][method]
+    runtime_api_types = substrate.runtime_config.type_registry["runtime_api"][api].get(
+        "types", {}
+    )
 
     # Encode params
     param_data = ScaleBytes(bytes())
-    for idx, param in enumerate(runtime_call_def['params']):
-        scale_obj = substrate.runtime_config.create_scale_object(param['type'])
+    for idx, param in enumerate(runtime_call_def["params"]):
+        scale_obj = substrate.runtime_config.create_scale_object(param["type"])
         if type(params) is list:
             param_data += scale_obj.encode(params[idx])
         else:
-            if param['name'] not in params:
+            if param["name"] not in params:
                 raise ValueError(f"Runtime Call param '{param['name']}' is missing")
 
-            param_data += scale_obj.encode(params[param['name']])
+            param_data += scale_obj.encode(params[param["name"]])
 
     # RPC request
-    result_data = substrate.rpc_request("state_call", [f'{api}_{method}', str(param_data), block_hash])
+    result_data = substrate.rpc_request(
+        "state_call", [f"{api}_{method}", str(param_data), block_hash]
+    )
 
     # Decode result
-    result_obj = substrate.runtime_config.create_scale_object(runtime_call_def['type'])
-    result_obj.decode(ScaleBytes(result_data['result']), check_remaining=substrate.config.get('strict_scale_decode'))
+    result_obj = substrate.runtime_config.create_scale_object(runtime_call_def["type"])
+    result_obj.decode(
+        ScaleBytes(result_data["result"]),
+        check_remaining=substrate.config.get("strict_scale_decode"),
+    )
 
     return result_obj
 
@@ -184,8 +174,12 @@ def run(self):
 
         if last_extrinsic_hash != None:
             try:
-                receipt = block_handler_substrate.retrieve_extrinsic_by_hash(block_hash, last_extrinsic_hash)
-                bt.logging.debug(f"Last set-weights call: {'Success' if receipt.is_success else format('Failure, reason: %s', receipt.error_message['name'] if receipt.error_message != None else 'nil')}")
+                receipt = block_handler_substrate.retrieve_extrinsic_by_hash(
+                    block_hash, last_extrinsic_hash
+                )
+                bt.logging.debug(
+                    f"Last set-weights call: {'Success' if receipt.is_success else format('Failure, reason: %s', receipt.error_message['name'] if receipt.error_message != None else 'nil')}"
+                )
 
                 should_retry = False
                 last_extrinsic_hash = None
@@ -220,7 +214,13 @@ def run(self):
                     call=call, keypair=self.wallet.hotkey, era={"period": 1000}
                 )
 
-                dry_run = runtime_call(substrate=substrate, api="TaggedTransactionQueue", method="validate_transaction", params=["InBlock", extrinsic, block_hash], block_hash=block_hash)
+                dry_run = runtime_call(
+                    substrate=substrate,
+                    api="TaggedTransactionQueue",
+                    method="validate_transaction",
+                    params=["InBlock", extrinsic, block_hash],
+                    block_hash=block_hash,
+                )
                 bt.logging.debug(dry_run)
 
                 response = substrate.submit_extrinsic(
@@ -232,12 +232,19 @@ def run(self):
                 print(response, call, self.wallet.hotkey)
 
                 result_data = substrate.rpc_request("author_pendingExtrinsics", [])
-                for extrinsic_data in result_data['result']:
-                    extrinsic = substrate.runtime_config.create_scale_object('Extrinsic', metadata=substrate.metadata)
-                    extrinsic.decode(ScaleBytes(extrinsic_data), check_remaining=substrate.config.get('strict_scale_decode'))
+                for extrinsic_data in result_data["result"]:
+                    extrinsic = substrate.runtime_config.create_scale_object(
+                        "Extrinsic", metadata=substrate.metadata
+                    )
+                    extrinsic.decode(
+                        ScaleBytes(extrinsic_data),
+                        check_remaining=substrate.config.get("strict_scale_decode"),
+                    )
 
                     if extrinsic.value["extrinsic_hash"] == response.extrinsic_hash:
-                        bt.logging.debug("Weights transaction is in the pending transaction pool")
+                        bt.logging.debug(
+                            "Weights transaction is in the pending transaction pool"
+                        )
 
                 last_extrinsic_hash = response.extrinsic_hash
                 should_retry = False
