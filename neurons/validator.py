@@ -312,8 +312,9 @@ class neuron:
         # After all we have to ensure subtensor connection is closed properly
         finally:
             if hasattr(self, "subtensor"):
-                bittensor.logging.debug("Closing subtensor connection")
+                bt.logging.debug("Closing subtensor connection")
                 self.subtensor.close()
+                self.stop_subscription_thread()
 
     def log(self, log: str):
         bt.logging.debug(log)
@@ -331,6 +332,7 @@ class neuron:
             url=self.subtensor.chain_endpoint,
             type_registry=bt.__type_registry__,
         )
+        self.subscription_substrate = substrate
 
         def neuron_registered_subscription_handler(obj, update_nr, subscription_id):
             block_no = obj["header"]["number"]
@@ -389,7 +391,8 @@ class neuron:
             self.should_exit = True
             self.subscription_thread.join(5)
             self.subscription_is_running = False
-            bt.logging.debug("Stopped")
+            self.subscription_substrate.close()
+            bt.logging.debug("Stopped subscription handler.")
 
     def __del__(self):
         """
