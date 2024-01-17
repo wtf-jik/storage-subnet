@@ -204,7 +204,7 @@ async def compute_tier(stats_key: str, database: aioredis.Redis):
     if total_successes is None:
         # This value wasn't stored. Legacy miners will have this issue.
         total_successes = (
-            store_success_rate + retrieval_success_rate + challenge_success_rate
+            store_successes + retrieval_successes + challenge_successes
         )
     total_successes = int(total_successes)
 
