@@ -654,10 +654,8 @@ class miner:
         bt.logging.trace(f"retrieved data: {pformat(data)}")
 
         # Chunk the data according to the specified (random) chunk size
-        filepath = os.path.expanduser(
-            f"{self.config.database.directory}/{synapse.challenge_hash}"
-        )
-        if not os.path.isfile(filepath):
+        filepath = data.get(b"filepath", None)
+        if filepath is None:
             bt.logging.warning(
                 f"No file found for {synapse.challenge_hash} in index, trying path construction..."
             )
@@ -667,7 +665,9 @@ class miner:
                 f"{self.config.database.directory}/{synapse.challenge_hash}"
             )
             if not os.path.isfile(filepath):
-                bt.logging.error(f"No file found for {synapse.challenge_hash}")
+                bt.logging.error(
+                    f"No file found for {synapse.challenge_hash} in {self.config.database.directory}."
+                )
                 return synapse
 
         bt.logging.trace(f"entering load_from_filesystem()")
@@ -803,7 +803,9 @@ class miner:
                 f"{self.config.database.directory}/{synapse.data_hash}"
             )
             if not os.path.isfile(filepath):
-                bt.logging.error(f"No file found for {synapse.data_hash}")
+                bt.logging.error(
+                    f"No file found for {synapse.data_hash} in {self.config.database.directory}"
+                )
                 return synapse
 
         bt.logging.trace(f"entering load_from_filesystem()")
