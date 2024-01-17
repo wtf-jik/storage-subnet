@@ -163,9 +163,7 @@ async def update_statistics(
         store_successes = int(await database.hget(stats_key, "store_successes"))
         challenge_successes = int(await database.hget(stats_key, "challenge_successes"))
         retrieval_successes = int(await database.hget(stats_key, "retrieve_successes"))
-        total_successes = (
-            store_successes + retrieval_successes + challenge_successes
-        )
+        total_successes = store_successes + retrieval_successes + challenge_successes
         await database.hset(stats_key, "total_successes", total_successes)
     if success:
         await database.hincrby(stats_key, "total_successes", 1)
@@ -209,9 +207,7 @@ async def compute_tier(stats_key: str, database: aioredis.Redis):
     total_successes = await database.hget(stats_key, "total_successes")
     if total_successes is None:
         # This value wasn't stored. Legacy miners will have this issue.
-        total_successes = (
-            store_successes + retrieval_successes + challenge_successes
-        )
+        total_successes = store_successes + retrieval_successes + challenge_successes
     total_successes = int(total_successes)
 
     if (
