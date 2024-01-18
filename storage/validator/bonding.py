@@ -158,6 +158,22 @@ async def update_statistics(
         if success:
             await database.hincrby(stats_key, f"{task_type}_successes", 1)
 
+    # Transition retireval -> retrieve successes (legacy)
+    legacy_retrieve_successes = await database.hget(stats_key, "retrieval_successes")
+    if legacy_retrieve_successes != None:
+        await database.hset(
+            stats_key, "retrieve_successes", int(legacy_retrieve_successes)
+        )
+        await database.hdel(stats_key, "retrieval_successes")
+
+    # Transition retireval -> retrieve attempts (legacy)
+    legacy_retrieve_attempts = await database.hget(stats_key, "retrieval_attempts")
+    if legacy_retrieve_attempts != None:
+        await database.hset(
+            stats_key, "retrieve_attempts", int(legacy_retrieve_attempts)
+        )
+        await database.hdel(stats_key, "retrieval_attempts")
+
     # Update the total successes that we rollover every epoch
     if await database.hget(stats_key, "total_successes") == None:
         store_successes = int(await database.hget(stats_key, "store_successes"))
