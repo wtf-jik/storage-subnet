@@ -360,13 +360,13 @@ class neuron:
             ):
                 hotkeys = deepcopy(self.rebalance_queue)
                 self.rebalance_queue.clear()
+                self.log(f"Running rebalance in separate process on hotkeys {hotkeys}")
 
-                self.log(f"Running rebalance in background on hotkeys {hotkeys}")
-                self.loop.run_until_complete(
-                    rebalance_data(
-                        self, k=2, dropped_hotkeys=hotkeys, hotkey_replaced=True
-                    )
-                )
+                # Fire off the script
+                hotkeys_str = ','.join(map(str, hotkeys))
+                hotkeys_arg = quote(hotkeys_str)
+                path = os.path.join(os.path.abspath("."), "scripts/rebalance_deregistration.sh")
+                subprocess.run([path, hotkeys_arg])
 
         substrate.subscribe_block_headers(neuron_registered_subscription_handler)
 
