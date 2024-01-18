@@ -218,6 +218,11 @@ class neuron:
             while 1:
                 start_epoch = time.time()
 
+                self.metagraph.sync(subtensor=self.subtensor)
+                prev_set_weights_block = = self.metagraph.last_update[
+                    self.my_subnet_uid
+                ].item()
+
                 # --- Wait until next step epoch.
                 current_block = self.subtensor.get_current_block()
                 while (
@@ -268,7 +273,7 @@ class neuron:
                 bt.logging.info(f"Checking if should set weights")
                 validator_should_set_weights = should_set_weights(
                     get_current_block(self.subtensor),
-                    self.prev_step_block,
+                    prev_set_weights_block,
                     self.config.neuron.set_weights_epoch_length,
                     self.config.neuron.disable_set_weights,
                 )
@@ -285,6 +290,7 @@ class neuron:
                         moving_averaged_scores=self.moving_averaged_scores,
                         wandb_on=self.config.wandb.on,
                     )
+                    prev_set_weights_block = get_current_block(self.subtensor)
                     save_state(self)
 
                 # Rollover wandb to a new run.
