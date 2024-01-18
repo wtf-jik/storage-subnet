@@ -51,9 +51,7 @@ class StorageVersion:
         )
 
 
-with open("VERSION", "r") as f:
-    __version__ = f.read().strip()
-
+__version__ = "1.3.2"
 version = StorageVersion.from_string(__version__)
 __spec_version__ = version.to_spec_version()
 
