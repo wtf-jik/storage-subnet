@@ -25,6 +25,8 @@ import aioredis
 import threading
 import traceback
 import bittensor as bt
+import subprocess
+from shlex import quote
 from copy import deepcopy
 from loguru import logger
 from pprint import pformat
