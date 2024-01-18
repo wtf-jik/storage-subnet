@@ -262,9 +262,9 @@ class neuron:
                     self.config.neuron.checkpoint_block_length,
                 )
                 bt.logging.debug(
-                    f"should_checkpoint() params: (current block) {current_block} (prev block) {self.prev_step_block} (checkpoint_block_length) {self.config.neuron.checkpoint_block_length}\n"
-                    f"should checkpoint ? {should_checkpoint_validator}"
+                    f"should_checkpoint() params: (current block) {current_block} (prev block) {self.prev_step_block} (checkpoint_block_length) {self.config.neuron.checkpoint_block_length}"
                 )
+                bt.logging.debug(f"should checkpoint ? {should_checkpoint_validator}")
                 if should_checkpoint_validator:
                     bt.logging.info(f"Checkpointing...")
                     checkpoint(self)
@@ -277,11 +277,11 @@ class neuron:
                     self.config.neuron.set_weights_epoch_length,
                     self.config.neuron.disable_set_weights,
                 )
-                bt.logging.info(
+                bt.logging.debug(
                     f"Should validator check weights? -> {validator_should_set_weights}"
                 )
                 if validator_should_set_weights:
-                    bt.logging.info(f"Setting weights {self.moving_averaged_scores}")
+                    bt.logging.debug(f"Setting weights {self.moving_averaged_scores}")
                     set_weights_for_validator(
                         subtensor=self.subtensor,
                         wallet=self.wallet,
