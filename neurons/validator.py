@@ -368,7 +368,7 @@ class neuron:
                 path = os.path.join(
                     os.path.abspath("."), "scripts/rebalance_deregistration.sh"
                 )
-                subprocess.run(
+                subprocess.Popen(
                     [
                         path,
                         hotkeys_arg,
