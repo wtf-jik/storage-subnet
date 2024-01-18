@@ -900,9 +900,16 @@ def main():
     """
     miner().run_in_background_thread()
 
-    while 1:
-        time.sleep(1)
-
+    try:    
+        while 1:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        bt.logging.info("Keyboard interrupt detected, exiting.")
+        sys.exit(0)
+    except Exception as e:
+        bt.logging.error(traceback.format_exc())
+        bt.logging.error(f"Unhandled exception: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
