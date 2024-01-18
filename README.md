@@ -314,8 +314,9 @@ Failing to pass either challenge or retrieval verifications incur negative rewar
 **Graphical Representation:**
 - The graph below illustrates how rewards increase as miners advance through the tiers. It visually represents the potential growth in earnings as miners optimize their operations and maintain high standards of performance.
 
-<img src="assets/reward-tiers-vert.png" alt="Bonding Curves" width="650"/>
-
+<div align="center">
+   <img src="assets/reward-tiers-vert.png" alt="Bonding Curves" width="650"/>
+</div>
 
 #### Tier System:
 The tier system classifies miners into five distinct categories, each with specific requirements and storage limits. These tiers are designed to reward miners based on their performance, reliability, and the total volume of data they can store.
