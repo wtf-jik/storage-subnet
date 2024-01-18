@@ -14,17 +14,11 @@ async def main(args):
 
     bt.logging.info(f"Connecting to Redis at db={args.database_index}...")
     r = aioredis.StrictRedis(db=args.database_index)
-    failed_uids = await migrate_data_directory(r, new_directory)
+    failed_uids = await migrate_data_directory(r, new_directory, return_failures=True)
 
     if failed_uids != None:
-        bt.logging.warn(
-            f"Failed to migrate {len(failed_uids)} filepaths for the following chunks: {failed_uids}"
-        )
-        bt.logging.warn(
-            "Thus not all data was migrated, and index remains unchanged for these filepaths."
-        )
-        bt.logging.warn(
-            "Please ensure the data exists at the new directory and try again."
+        bt.logging.error(
+            f"Failed to migrate {len(failed_uids)} filepaths to the new directory: {new_directory}."
         )
     else:
         bt.logging.success("All data was migrated to the new directory.")

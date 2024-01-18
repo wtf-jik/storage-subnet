@@ -1,9 +1,8 @@
 #!/bin/bash
-# Usage: ./migrate_database_directory.sh <old_path> <new_path>
+# Usage: ./migrate_database_directory.sh <old_path> <new_path> <database_index_int>
 
-# Check if two arguments are provided
 if [ "$#" -ne 3 ]; then
-    echo "Usage: $0 <old_path> <new_path> <database_index>"
+    echo "Usage: $0 <old_path> <new_path> <database_index_int>"
     exit 1
 fi
 
