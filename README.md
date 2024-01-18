@@ -314,7 +314,7 @@ Failing to pass either challenge or retrieval verifications incur negative rewar
 **Graphical Representation:**
 - The graph below illustrates how rewards increase as miners advance through the tiers. It visually represents the potential growth in earnings as miners optimize their operations and maintain high standards of performance.
 
-<img src="assets/reward-tiers-vert.png" alt="Bonding Curves" width="300"/>
+<img src="assets/reward-tiers-vert.png" alt="Bonding Curves" width="650"/>
 
 
 #### Tier System:
