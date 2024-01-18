@@ -198,6 +198,22 @@ async def compute_tier(stats_key: str, database: aioredis.Redis):
         bt.logging.warning(f"Miner key {stats_key} is not registered!")
         return
 
+    # Transition retireval -> retrieve successes (legacy)
+    legacy_retrieve_successes = await database.hget(stats_key, "retrieval_successes")
+    if legacy_retrieve_successes != None:
+        await database.hset(
+            stats_key, "retrieve_successes", int(legacy_retrieve_successes)
+        )
+        await database.hdel(stats_key, "retrieval_successes")
+
+    # Transition retireval -> retrieve attempts (legacy)
+    legacy_retrieve_attempts = await database.hget(stats_key, "retrieval_attempts")
+    if legacy_retrieve_attempts != None:
+        await database.hset(
+            stats_key, "retrieve_attempts", int(legacy_retrieve_attempts)
+        )
+        await database.hdel(stats_key, "retrieval_attempts")
+
     # Get the number of successful challenges
     challenge_successes = int(await database.hget(stats_key, "challenge_successes"))
     # Get the number of successful retrievals
