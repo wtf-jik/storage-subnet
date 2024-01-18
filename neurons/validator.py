@@ -219,7 +219,7 @@ class neuron:
                 start_epoch = time.time()
 
                 self.metagraph.sync(subtensor=self.subtensor)
-                prev_set_weights_block = = self.metagraph.last_update[
+                prev_set_weights_block = self.metagraph.last_update[
                     self.my_subnet_uid
                 ].item()
 
