@@ -172,8 +172,6 @@ def run(self):
         nonlocal checked_extrinsics_count
         nonlocal should_retry
 
-        bt.logging.info(f'last extrinsic hash {last_extrinsic_hash}')
-
         if last_extrinsic_hash != None:
             try:
                 receipt = block_handler_substrate.retrieve_extrinsic_by_hash(
