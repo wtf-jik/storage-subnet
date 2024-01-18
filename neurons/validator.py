@@ -363,10 +363,19 @@ class neuron:
                 self.log(f"Running rebalance in separate process on hotkeys {hotkeys}")
 
                 # Fire off the script
-                hotkeys_str = ','.join(map(str, hotkeys))
+                hotkeys_str = ",".join(map(str, hotkeys))
                 hotkeys_arg = quote(hotkeys_str)
-                path = os.path.join(os.path.abspath("."), "scripts/rebalance_deregistration.sh")
-                subprocess.run([path, hotkeys_arg])
+                path = os.path.join(
+                    os.path.abspath("."), "scripts/rebalance_deregistration.sh"
+                )
+                subprocess.run(
+                    [
+                        path,
+                        hotkeys_arg,
+                        self.subtensor.chain_endpoint,
+                        str(self.config.database.index),
+                    ]
+                )
 
         substrate.subscribe_block_headers(neuron_registered_subscription_handler)
 

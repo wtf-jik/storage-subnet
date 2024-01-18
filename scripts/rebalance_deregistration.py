@@ -17,15 +17,15 @@ async def main(args):
         database = aioredis.StrictRedis(db=args.database_index)
 
         hotkeys = args.hotkeys.split(",")
-        bt.logging.info(f"Deregistered hotkeys {hotkeys} will be rebalanced in the index.")
+        bt.logging.info(
+            f"Deregistered hotkeys {hotkeys} will be rebalanced in the index."
+        )
 
         self = argparse.Namespace()
         self.metagraph = metagraph
         self.database = database
 
-        await rebalance_data(
-            self, k=2, dropped_hotkeys=hotkeys, hotkey_replaced=True
-        )
+        await rebalance_data(self, k=2, dropped_hotkeys=hotkeys, hotkey_replaced=True)
 
     finally:
         if "subtensor" in locals():
@@ -33,11 +33,15 @@ async def main(args):
             bt.logging.debug("closing subtensor connection")
 
 
-
 if __name__ == "__main__":
     try:
         parser = argparse.ArgumentParser()
-        parser.add_argument("--hotkeys", type=str, required=True, help="comma separated list of hotkeys to deregister")
+        parser.add_argument(
+            "--hotkeys",
+            type=str,
+            required=True,
+            help="comma separated list of hotkeys to deregister",
+        )
         parser.add_argument("--network", type=str, default="local")
         parser.add_argument("--netuid", type=int, default=21)
         parser.add_argument("--database_index", type=int, default=1)
