@@ -49,7 +49,7 @@ Currently supporting `python>=3.9,<3.11`.
    - [Retrieval Phase](#retrieval-phase)
 1. [Reward System](#reward-system)
 1. [Epoch UID Selection](#epoch-uid-selection)
-1. [Running FileTao]
+1. [Running FileTao](#running-filetao)
    - [Running a Miner](#running-a-miner)
    - [Running a Validator](#running-a-validator)
    - [Running the API](#running-the-api)
