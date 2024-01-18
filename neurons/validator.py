@@ -215,7 +215,7 @@ class neuron:
         self.run_subscription_thread()
 
         try:
-            while True:
+            while 1:
                 start_epoch = time.time()
 
                 # --- Wait until next step epoch.

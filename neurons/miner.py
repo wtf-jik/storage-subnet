@@ -900,7 +900,7 @@ def main():
     """
     miner().run_in_background_thread()
 
-    while True:
+    while 1:
         time.sleep(1)
 
 
