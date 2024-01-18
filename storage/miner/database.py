@@ -140,3 +140,55 @@ async def get_total_storage_used(r):
         if size:
             total_size += int(size)
     return total_size
+
+
+async def migrate_data_directory(r, new_base_directory, return_failures=False):
+    async for key in r.scan_iter("*"):
+        filepath = await r.hget(key, b"filepath")
+        old_base_directory = os.path.dirname(filepath.decode("utf-8"))
+        break
+
+    new_base_directory = os.path.expanduser(new_base_directory)
+    bt.logging.info(
+        f"Migrating filepaths for all hashes in Redis index from old base {old_base_directory} to new {new_base_directory}"
+    )
+
+    if not os.path.exists(new_base_directory):
+        bt.logging.info(
+            f"New base directory {new_base_directory} does not exist. Creating..."
+        )
+        os.makedirs(new_base_directory)
+
+    failed_filepaths = []
+    async for key in r.scan_iter("*"):
+        filepath = await r.hget(key, b"filepath")
+
+        if filepath:
+            filepath = filepath.decode("utf-8")
+            data_hash = key.decode("utf-8")
+            new_filepath = os.path.join(new_base_directory, data_hash)
+
+            if not os.path.exists(new_filepath):
+                bt.logging.trace(
+                    f"Data does not exist in new path {new_filepath}. Skipping..."
+                )
+                failed_filepaths.append(new_filepath)
+                continue
+
+            await r.hset(key, "filepath", new_filepath)
+
+    if len(failed_filepaths):
+        if not os.path.exists("logs"):
+            os.makedirs("logs")
+        with open("logs/failed_filepaths.json", "w") as f:
+            json.dump(failed_filepaths, f)
+        bt.logging.error(
+            f"Failed to migrate {len(failed_filepaths)} files. These were skipped and may need to be migrated manually."
+        )
+        bt.logging.error(
+            f"Please see {os.path.abspath('logs/failed_migration_filepaths.json')} for a complete list of failed filepaths."
+        )
+    else:
+        bt.logging.success("Successfully migrated all filepaths.")
+
+    return failed_filepaths if return_failures else None

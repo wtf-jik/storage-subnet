@@ -135,6 +135,20 @@ ftcli retrieve list --wallet.name mywallet
 
 ![list](assets/list.png)
 
+
+### Miner statistics
+
+If you are running a validator and have a locally running instance of Redis, you may use this command to view the miner statistics gathered. This command will display a list of all hotkeys and their associated statistics, such as `total successes`, `attempts` vs `successes` for each category, `tier`, `current storage`, and `total storage limit`.
+
+```bash
+ftcli miner stats --index 0
+```
+![stats](assets/miner_stats.png)
+
+#### Options
+- `--index <id>`: (Optional) Integer index of the Redis database (default: 0)
+
+
 ## General Options
 - `--help`: Displays help information about CLI commands and options.
 
@@ -626,6 +640,10 @@ Migrating database from ~/.data to ~/.new_data_path ...
 2023-12-28 21:16:25.943 |     SUCCESS      | All data was migrated to the new directory.
 ```
 
+> NOTE: If you are transferring data to a new server, you will need to modify the `rsync` command found in `scripts/migrate_database_directory.sh` to point to the new server.
+```bash
+rsync -avz /path/to/source/file user@remote_host:/path/to/destination/
+```
 
 ### Running a validator
 ```bash
