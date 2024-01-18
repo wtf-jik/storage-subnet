@@ -19,6 +19,9 @@ Currently supporting `python>=3.9,<3.11`.
 # Table of Contents for Subnet 21 (FileTAO)
 
 1. [FileTAO](#FileTAO)
+1. [Installation](#installation)
+   - [Install Redis](#install-redis)
+   - [Install PM2](#install-pm2)
 1. [Network Stats](#network-stats)
 1. [Storage CLI Interface](#storage-cli-interface)
    - [Overview](#overview)
@@ -46,9 +49,7 @@ Currently supporting `python>=3.9,<3.11`.
    - [Retrieval Phase](#retrieval-phase)
 1. [Reward System](#reward-system)
 1. [Epoch UID Selection](#epoch-uid-selection)
-1. [Installation](#installation)
-   - [Install Redis](#install-redis)
-   - [Install PM2](#install-pm2)
+1. [Running FileTao]
    - [Running a Miner](#running-a-miner)
    - [Running a Validator](#running-a-validator)
    - [Running the API](#running-the-api)
@@ -63,6 +64,99 @@ The Storage CLI provides a user-friendly command-line interface for storing and 
 
 ## Prerequisites
 Before using the Storage CLI, ensure that Bittensor is installed and your wallet (hotkey and coldkey) is properly configured.
+
+
+## Installation
+```bash
+git clone https://github.com/ifrit98/storage-subnet
+cd storage-subnet
+python -m pip install -e .
+```
+
+### Install Redis
+Install Redis on your host system.
+
+Linux [instructions](https://redis.io/docs/install/install-redis/install-redis-on-linux/)
+
+```bash
+sudo apt install lsb-release curl gpg
+
+curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
+
+echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
+
+sudo apt-get update
+sudo apt-get install redis
+```
+
+Ensure the local Redis server is started.
+
+```bash
+sudo systemctl status redis-server.service
+```
+
+You should see output like:
+```
+● redis-server.service - Advanced key-value store
+     Loaded: loaded (/lib/systemd/system/redis-server.service; disabled; vendor preset: enabled)
+     Active: active (running) since Thu 2023-11-16 22:35:42 EST; 3min 25s ago
+       Docs: http://redis.io/documentation,
+             man:redis-server(1)
+   Main PID: 31881 (redis-server)
+     Status: "Ready to accept connections"
+      Tasks: 5 (limit: 38370)
+     Memory: 2.9M
+        CPU: 387ms
+     CGroup: /system.slice/redis-server.service
+             └─31881 "/usr/bin/redis-server 127.0.0.1:6379" "" "" "" "" "" "" ""
+
+Nov 16 22:35:42 user systemd[1]: Starting Advanced key-value store...
+Nov 16 22:35:42 user systemd[1]: Started Advanced key-value store.
+```
+
+#### Redis troubleshooting
+If you have problems with connecting to redis or it is not active for some reason, try:
+
+(1) Look for existing processes on the default redis port (6379)
+```
+sudo lsof -i:6379
+```
+
+If anything displays, like in the example below:
+
+```bash
+COMMAND    PID   USER   FD   TYPE    DEVICE SIZE/OFF NODE NAME
+python3 961206   user   33u  IPv4 455676435      0t0  TCP 123.456.111.22:58162->111.222.333.44.bc.googleusercontent.com:6379 (ESTABLISHED)
+
+```
+
+Look for the process ID under `PID` and kill it
+
+```bash
+kill -9 <PID>
+
+#e.g.
+kill -9 961206
+```
+
+(2) Restarting the service
+```bash
+systemctl restart redis
+```
+
+### Install PM2
+This will allow you to use the process manager `pm2` for easily setting up your miner or validator.
+
+Install nodejs and npm
+```bash
+sudo apt install nodejs npm
+```
+
+Once this compeltes, install pm2 globally
+```bash
+sudo npm install pm2 -g
+```
+
 
 ## Commands
 
@@ -460,96 +554,9 @@ miner_uids
 >>> [0, 4, 9] # Only these miners are allowed to be challenged this round (3 blocks, ~36 sec)
 ```
 
-## Installation
-```bash
-git clone https://github.com/ifrit98/storage-subnet
-cd storage-subnet
-python -m pip install -e .
-```
 
-### Install Redis
-Install Redis on your host system.
-
-Linux [instructions](https://redis.io/docs/install/install-redis/install-redis-on-linux/)
-
-```bash
-sudo apt install lsb-release curl gpg
-
-curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
-
-echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
-
-sudo apt-get update
-sudo apt-get install redis
-```
-
-Ensure the local Redis server is started.
-
-```bash
-sudo systemctl status redis-server.service
-```
-
-You should see output like:
-```
-● redis-server.service - Advanced key-value store
-     Loaded: loaded (/lib/systemd/system/redis-server.service; disabled; vendor preset: enabled)
-     Active: active (running) since Thu 2023-11-16 22:35:42 EST; 3min 25s ago
-       Docs: http://redis.io/documentation,
-             man:redis-server(1)
-   Main PID: 31881 (redis-server)
-     Status: "Ready to accept connections"
-      Tasks: 5 (limit: 38370)
-     Memory: 2.9M
-        CPU: 387ms
-     CGroup: /system.slice/redis-server.service
-             └─31881 "/usr/bin/redis-server 127.0.0.1:6379" "" "" "" "" "" "" ""
-
-Nov 16 22:35:42 user systemd[1]: Starting Advanced key-value store...
-Nov 16 22:35:42 user systemd[1]: Started Advanced key-value store.
-```
-
-#### Redis troubleshooting
-If you have problems with connecting to redis or it is not active for some reason, try:
-
-(1) Look for existing processes on the default redis port (6379)
-```
-sudo lsof -i:6379
-```
-
-If anything displays, like in the example below:
-
-```bash
-COMMAND    PID   USER   FD   TYPE    DEVICE SIZE/OFF NODE NAME
-python3 961206   user   33u  IPv4 455676435      0t0  TCP 123.456.111.22:58162->111.222.333.44.bc.googleusercontent.com:6379 (ESTABLISHED)
-
-```
-
-Look for the process ID under `PID` and kill it
-
-```bash
-kill -9 <PID>
-
-#e.g.
-kill -9 961206
-```
-
-(2) Restarting the service
-```bash
-systemctl restart redis
-```
-
-### Install PM2
-This will allow you to use the process manager `pm2` for easily setting up your miner or validator.
-
-Install nodejs and npm
-```bash
-sudo apt install nodejs npm
-```
-
-Once this compeltes, install pm2 globally
-```bash
-sudo npm install pm2 -g
-```
+## Running FileTao
+FileTao is made up of both miners and validators, both of which are responsible for proper functioning of the network. Miners are the nodes that store and provide data availability, while validators are indexers and verifier nodes who challenge the miners to ensure the health and consistency of the network.
 
 
 ### Running a miner
@@ -642,6 +649,8 @@ Migrating database from ~/.data to ~/.new_data_path ...
 ```
 
 > NOTE: If you are transferring data to a new server, you will need to modify the `rsync` command found in `scripts/migrate_database_directory.sh` to point to the new server.
+
+E.g.
 ```bash
 rsync -avz /path/to/source/file user@remote_host:/path/to/destination/
 ```
