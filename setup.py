@@ -73,7 +73,7 @@ setup(
     include_package_data=True,
     author_email="ifrit98@gmail.com",
     license="MIT",
-    python_requires=">=3.9,<3.11",
+    python_requires=">=3.9,<3.12",
     scripts=["bin/ftcli"],
     install_requires=requirements,
     classifiers=[
